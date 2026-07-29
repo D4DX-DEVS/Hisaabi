@@ -1,0 +1,21 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+# SPA fallback (ONLY for routes, not assets)
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# No cache for HTML
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "no-store, no-cache, must-revalidate"
+
+# Cache assets (Vite hashed files)
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
