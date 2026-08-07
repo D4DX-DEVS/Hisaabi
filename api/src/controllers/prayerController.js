@@ -185,14 +185,24 @@ async function getFardhPrayerAnalysis(req, res, next) {
 
     const prayerStats = {};
     for (const p of FARDH_PRAYERS) {
-      prayerStats[p] = { total: eligibleDays, exempt: exemptDays.size, completed: 0, jamaat: 0, ontime: 0, late: 0, missed: 0 };
+      prayerStats[p] = { total: 0, exempt: 0, completed: 0, jamaat: 0, ontime: 0, late: 0, missed: 0 };
     }
 
     for (const day of days) {
-      if (exemptDays.has(day)) continue;
+      const dayIsExempt = exemptDays.has(day);
       const fp = (recordsByDate[day] && recordsByDate[day].fardh_prayers) || {};
       for (const p of FARDH_PRAYERS) {
-        if (fp[p] === true) {
+        const wasCompleted = fp[p] === true;
+        if (dayIsExempt && !wasCompleted) {
+          // Genuinely exempt for this prayer — the cycle was already active
+          // and she never prayed it, so it's excluded entirely (not missed).
+          prayerStats[p].exempt++;
+          continue;
+        }
+        // Either a normal eligible day, or a prayer already completed
+        // before the cycle started that same day — credit is preserved.
+        prayerStats[p].total++;
+        if (wasCompleted) {
           prayerStats[p].completed++;
           const mode = fp[`${p}_m`];
           if (mode === 'j') prayerStats[p].jamaat++;
@@ -203,7 +213,7 @@ async function getFardhPrayerAnalysis(req, res, next) {
     }
 
     for (const p of FARDH_PRAYERS) {
-      prayerStats[p].missed = eligibleDays - prayerStats[p].completed;
+      prayerStats[p].missed = prayerStats[p].total - prayerStats[p].completed;
       const total = prayerStats[p].total;
       prayerStats[p].percentages = {
         jamaat: total ? Math.round((prayerStats[p].jamaat / total) * 100) : 0,
@@ -213,8 +223,9 @@ async function getFardhPrayerAnalysis(req, res, next) {
       };
     }
 
-    const totalPrayers = eligibleDays * 5;
-    const overall = { total_prayers: totalPrayers, exempt_prayers: exemptDays.size * 5, completed: 0, jamaat: 0, ontime: 0, late: 0, missed: 0 };
+    const totalPrayers = FARDH_PRAYERS.reduce((sum, p) => sum + prayerStats[p].total, 0);
+    const totalExemptPrayers = FARDH_PRAYERS.reduce((sum, p) => sum + prayerStats[p].exempt, 0);
+    const overall = { total_prayers: totalPrayers, exempt_prayers: totalExemptPrayers, completed: 0, jamaat: 0, ontime: 0, late: 0, missed: 0 };
     for (const p of FARDH_PRAYERS) {
       overall.completed += prayerStats[p].completed;
       overall.jamaat += prayerStats[p].jamaat;
