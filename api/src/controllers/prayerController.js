@@ -1,8 +1,38 @@
-const { PrayerTracking, ActivityLog } = require('../models');
+const { PrayerTracking, ActivityLog, User, PeriodTracking } = require('../models');
 const { queueStreakUpdate } = require('../services/streakQueueService');
 const { getCurrentDate, getDaysBetweenDates, getMonthDateRange } = require('../utils/dateUtils');
 
 const FARDH_PRAYERS = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
+
+async function getExemptDays(userId, startDate, endDate) {
+  const user = await User.findById(userId);
+  const exemptionEnabled =
+    user && user.gender === 'f' && user.settings && user.settings.female_settings &&
+    user.settings.female_settings.maintain_streaks_during_period === true;
+
+  if (!exemptionEnabled) return new Set();
+
+  const periods = await PeriodTracking.find({
+    user_id: userId,
+    start_date: { $lte: endDate },
+    end_date: { $gte: startDate },
+  });
+
+  // Clamp to today: an in-progress cycle is stored with a provisional end date
+  // (start + 5 days) until the user ends it, so days that haven't happened yet
+  // must not be counted as exempt.
+  const today = getCurrentDate();
+  const rangeEnd = endDate < today ? endDate : today;
+
+  const exemptDays = new Set();
+  for (const p of periods) {
+    const start = p.start_date > startDate ? p.start_date : startDate;
+    const end = p.end_date < rangeEnd ? p.end_date : rangeEnd;
+    if (start > end) continue;
+    getDaysBetweenDates(start, end).forEach((d) => exemptDays.add(d));
+  }
+  return exemptDays;
+}
 
 async function getPrayerTracking(req, res, next) {
   try {
@@ -147,16 +177,32 @@ async function getFardhPrayerAnalysis(req, res, next) {
 
     const days = getDaysBetweenDates(startDate, endDate);
     const totalDays = days.length;
+    const exemptDays = await getExemptDays(userId, startDate, endDate);
+    const eligibleDays = totalDays - exemptDays.size;
+
+    const recordsByDate = {};
+    for (const record of records) recordsByDate[record.date] = record;
 
     const prayerStats = {};
     for (const p of FARDH_PRAYERS) {
-      prayerStats[p] = { total: totalDays, completed: 0, jamaat: 0, ontime: 0, late: 0, missed: 0 };
+      prayerStats[p] = { total: 0, exempt: 0, completed: 0, jamaat: 0, ontime: 0, late: 0, missed: 0 };
     }
 
-    for (const record of records) {
-      const fp = record.fardh_prayers || {};
+    for (const day of days) {
+      const dayIsExempt = exemptDays.has(day);
+      const fp = (recordsByDate[day] && recordsByDate[day].fardh_prayers) || {};
       for (const p of FARDH_PRAYERS) {
-        if (fp[p] === true) {
+        const wasCompleted = fp[p] === true;
+        if (dayIsExempt && !wasCompleted) {
+          // Genuinely exempt for this prayer — the cycle was already active
+          // and she never prayed it, so it's excluded entirely (not missed).
+          prayerStats[p].exempt++;
+          continue;
+        }
+        // Either a normal eligible day, or a prayer already completed
+        // before the cycle started that same day — credit is preserved.
+        prayerStats[p].total++;
+        if (wasCompleted) {
           prayerStats[p].completed++;
           const mode = fp[`${p}_m`];
           if (mode === 'j') prayerStats[p].jamaat++;
@@ -167,7 +213,7 @@ async function getFardhPrayerAnalysis(req, res, next) {
     }
 
     for (const p of FARDH_PRAYERS) {
-      prayerStats[p].missed = totalDays - prayerStats[p].completed;
+      prayerStats[p].missed = prayerStats[p].total - prayerStats[p].completed;
       const total = prayerStats[p].total;
       prayerStats[p].percentages = {
         jamaat: total ? Math.round((prayerStats[p].jamaat / total) * 100) : 0,
@@ -177,8 +223,9 @@ async function getFardhPrayerAnalysis(req, res, next) {
       };
     }
 
-    const totalPrayers = totalDays * 5;
-    const overall = { total_prayers: totalPrayers, completed: 0, jamaat: 0, ontime: 0, late: 0, missed: 0 };
+    const totalPrayers = FARDH_PRAYERS.reduce((sum, p) => sum + prayerStats[p].total, 0);
+    const totalExemptPrayers = FARDH_PRAYERS.reduce((sum, p) => sum + prayerStats[p].exempt, 0);
+    const overall = { total_prayers: totalPrayers, exempt_prayers: totalExemptPrayers, completed: 0, jamaat: 0, ontime: 0, late: 0, missed: 0 };
     for (const p of FARDH_PRAYERS) {
       overall.completed += prayerStats[p].completed;
       overall.jamaat += prayerStats[p].jamaat;
@@ -198,6 +245,8 @@ async function getFardhPrayerAnalysis(req, res, next) {
       end_date: endDate,
       year: yr || null,
       month: mo || null,
+      eligible_days: eligibleDays,
+      exempt_days: exemptDays.size,
       analysis: { overall, prayers: prayerStats },
     });
   } catch (err) {

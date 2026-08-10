@@ -1,8 +1,12 @@
 const { User } = require('../models');
 
+// FR: Personal Cycle Mode must default OFF and never be assumed from gender.
+// quran_during_menstruation follows the FR's 3-way Qur'an preference:
+// 'memory_or_device' | 'listen_only' | 'hide_prompts'.
 const DEFAULT_FEMALE_SETTINGS = {
-  period_tracking: true,
+  period_tracking: false,
   maintain_streaks_during_period: true,
+  quran_during_menstruation: 'memory_or_device',
 };
 
 function deepMerge(target, source) {
@@ -65,7 +69,7 @@ async function updateProfile(req, res, next) {
 
       if (gender === 'f' && prevGender !== 'f') {
         const settings = user.settings || {};
-        settings.female_settings = DEFAULT_FEMALE_SETTINGS;
+        settings.female_settings = { ...DEFAULT_FEMALE_SETTINGS };
         user.settings = settings;
         user.markModified('settings');
       } else if (gender === 'm' && prevGender === 'f') {
