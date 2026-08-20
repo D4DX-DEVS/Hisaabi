@@ -18,6 +18,7 @@ async function getPeriodHistory(req, res, next) {
       start_date: r.start_date,
       end_date: r.end_date,
       notes: r.notes,
+      created_at: r.created_at,
     }));
     return res.status(200).json({ periods });
   } catch (err) {
@@ -52,7 +53,13 @@ async function addPeriod(req, res, next) {
     const record = await PeriodTracking.create({ user_id: userId, start_date, end_date, notes: notes || null });
     return res.status(200).json({
       success: true,
-      period: { id: record._id, start_date: record.start_date, end_date: record.end_date, notes: record.notes },
+      period: {
+        id: record._id,
+        start_date: record.start_date,
+        end_date: record.end_date,
+        notes: record.notes,
+        created_at: record.created_at,
+      },
     });
   } catch (err) {
     next(err);
@@ -83,7 +90,13 @@ async function updatePeriod(req, res, next) {
 
     return res.status(200).json({
       success: true,
-      period: { id: record._id, start_date: record.start_date, end_date: record.end_date, notes: record.notes },
+      period: {
+        id: record._id,
+        start_date: record.start_date,
+        end_date: record.end_date,
+        notes: record.notes,
+        created_at: record.created_at,
+      },
     });
   } catch (err) {
     next(err);
