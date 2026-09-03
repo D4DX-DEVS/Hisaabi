@@ -117,6 +117,42 @@ async function addReadPage(req, res, next) {
   }
 }
 
+/**
+ * Record time spent reading, for a given day.
+ *
+ * `minutes` replaces the day's total by default; pass add:true to accumulate
+ * across several sittings.
+ */
+async function logReadingDuration(req, res, next) {
+  try {
+    const userId = req.user._id;
+    const { minutes, date, add } = req.body;
+
+    const value = Number(minutes);
+    if (!Number.isFinite(value) || value < 0) {
+      return res.status(400).json({ error: 'minutes must be a non-negative number' });
+    }
+
+    const targetDate = date || getCurrentDate();
+    let record = await QuranReading.findOne({ user_id: userId, date: targetDate });
+    if (!record) {
+      record = new QuranReading({ user_id: userId, date: targetDate, pages_read: [] });
+    }
+
+    const shouldAdd = add === true || add === 'true';
+    record.duration_minutes = shouldAdd ? (record.duration_minutes || 0) + value : value;
+    await record.save();
+
+    return res.status(200).json({
+      success: true,
+      date: targetDate,
+      duration_minutes: record.duration_minutes,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function removeReadPage(req, res, next) {
   try {
     const userId = req.user._id;
@@ -359,6 +395,7 @@ async function resetMemorization(req, res, next) {
 }
 
 module.exports = {
+  logReadingDuration,
   getReadingProgress,
   addReadPage,
   removeReadPage,

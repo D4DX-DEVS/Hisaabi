@@ -6,6 +6,7 @@ const {
   addReadPage,
   removeReadPage,
   handleReadingProgress,
+  logReadingDuration,
   getMemorization,
   addMemorizedAyah,
   removeMemorizedAyah,
@@ -20,6 +21,7 @@ router.get('/reading', getReadingProgress);
 router.post('/reading', addReadPage);
 // POST /reading/progress must come before DELETE /reading/:page to avoid conflict
 router.post('/reading/progress', handleReadingProgress);
+router.post('/reading/duration', logReadingDuration);
 router.delete('/reading/:page', removeReadPage);
 
 // Memorization — specific paths before parameterized
