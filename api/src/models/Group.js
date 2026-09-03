@@ -7,6 +7,12 @@ const groupSchema = new mongoose.Schema(
     group_id: { type: String, required: true, unique: true, maxlength: 6 },
     admin_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     co_admins: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User', default: [] }],
+    type: {
+      type: String,
+      enum: ['family', 'friends', 'study_circle', 'masjid', 'ramadan', 'community', 'custom'],
+      default: 'custom',
+    },
+    description: { type: String, default: '' },
   },
   {
     timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },

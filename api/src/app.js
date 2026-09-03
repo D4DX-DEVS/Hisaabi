@@ -26,6 +26,12 @@ const groupRoutes = require('./routes/groupRoutes');
 const groupActivityRoutes = require('./routes/groupActivityRoutes');
 const contentRoutes = require('./routes/contentRoutes');
 const adminRoutes = require('./routes/adminRoutes');
+const trackerRoutes = require('./routes/trackerRoutes');
+const muhasabahRoutes = require('./routes/muhasabahRoutes');
+const goodDeedRoutes = require('./routes/goodDeedRoutes');
+const worshipGoalRoutes = require('./routes/worshipGoalRoutes');
+const adhkarRoutes = require('./routes/adhkarRoutes');
+const groupSpaceRoutes = require('./routes/groupSpaceRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -97,6 +103,12 @@ app.use('/api/goals', goalsRoutes);
 app.use('/api/groups', groupRoutes);
 app.use('/api/group-activities', groupActivityRoutes);
 app.use('/api/content', contentRoutes);
+app.use('/api/tracker', trackerRoutes);
+app.use('/api/muhasabah', muhasabahRoutes);
+app.use('/api/good-deeds', goodDeedRoutes);
+app.use('/api/worship-goals', worshipGoalRoutes);
+app.use('/api/adhkar', adhkarRoutes);
+app.use('/api/group-space', groupSpaceRoutes);
 app.use('/api/admin', adminRoutes);
 
 // ── Public Live Links (no auth required) ──────────────────────────────────────

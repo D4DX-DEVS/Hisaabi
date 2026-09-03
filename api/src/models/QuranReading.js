@@ -6,6 +6,7 @@ const quranReadingSchema = new mongoose.Schema(
     date: { type: String, required: true },
     pages_read: { type: [Number], default: [] },
     last_read_page: { type: Number, default: null, min: 1, max: 604 },
+    duration_minutes: { type: Number, default: 0, min: 0 },
   },
   {
     timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },

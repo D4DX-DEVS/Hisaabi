@@ -72,7 +72,7 @@ async function updateFardhPrayer(req, res, next) {
     fp[prayer_name] = completed === true || completed === 'true';
 
     if (completed === true || completed === 'true') {
-      if (mode && ['j', 'ot', 'l'].includes(mode)) {
+      if (mode && ['j', 'ot', 'l', 'q'].includes(mode)) {
         fp[`${prayer_name}_m`] = mode;
       }
     } else {

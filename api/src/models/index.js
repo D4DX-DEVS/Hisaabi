@@ -33,6 +33,15 @@ const NameOfAllah = require('./NameOfAllah');
 const LiveLink = require('./LiveLink');
 const RamadanDua = require('./RamadanDua');
 const Banner = require('./Banner');
+const Muhasabah = require('./Muhasabah');
+const GoodDeedLog = require('./GoodDeedLog');
+const WorshipGoal = require('./WorshipGoal');
+const AdhkarTracking = require('./AdhkarTracking');
+const DuaTracking = require('./DuaTracking');
+const GroupChallenge = require('./GroupChallenge');
+const GroupGoal = require('./GroupGoal');
+const GroupFeedEvent = require('./GroupFeedEvent');
+const GroupReminder = require('./GroupReminder');
 
 async function connectDB() {
   try {
@@ -78,4 +87,13 @@ module.exports = {
   LiveLink,
   RamadanDua,
   Banner,
+  Muhasabah,
+  GoodDeedLog,
+  WorshipGoal,
+  AdhkarTracking,
+  DuaTracking,
+  GroupChallenge,
+  GroupGoal,
+  GroupFeedEvent,
+  GroupReminder,
 };
