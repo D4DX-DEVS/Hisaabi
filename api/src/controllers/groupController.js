@@ -30,6 +30,8 @@ function formatGroup(group, adminUser, currentUserId) {
     id: group._id,
     name: group.name,
     group_id: group.group_id,
+    type: group.type || 'custom',
+    description: group.description || '',
     admin: adminUser
       ? { id: adminUser._id, name: adminUser.name, email: adminUser.email }
       : null,
@@ -43,8 +45,13 @@ function formatGroup(group, adminUser, currentUserId) {
 async function createGroup(req, res, next) {
   try {
     const userId = req.user._id;
-    const { name } = req.body;
+    const { name, type, description } = req.body;
     if (!name) return res.status(400).json({ error: 'Group name is required' });
+
+    const VALID_TYPES = ['family', 'friends', 'study_circle', 'masjid', 'ramadan', 'community', 'custom'];
+    if (type && !VALID_TYPES.includes(type)) {
+      return res.status(400).json({ error: `type must be one of: ${VALID_TYPES.join(', ')}` });
+    }
 
     const group_id = await generateUniqueGroupId();
     const group = await Group.create({
@@ -52,12 +59,16 @@ async function createGroup(req, res, next) {
       group_id,
       admin_id: userId,
       users: [userId],
+      type: type || 'custom',
+      description: description || '',
     });
 
     return res.status(201).json({
       id: group._id,
       name: group.name,
       group_id: group.group_id,
+      type: group.type,
+      description: group.description,
       admin: { id: req.user._id, name: req.user.name, email: req.user.email },
       users: group.users,
       created_at: group.created_at,
