@@ -11,6 +11,7 @@ const {
   GoodDeedLog,
 } = require('../models');
 const { getCurrentDate, getDaysBetweenDates } = require('../utils/dateUtils');
+const { prayerLocation, exemptPrayersOn } = require('./prayerTimes');
 
 const FARDH_PRAYERS = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
 
@@ -26,9 +27,13 @@ const FARDH_PRAYERS = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
  * knows the user's prayer times, so it works those two days out and stores the
  * answer on the record as `boundary_exemptions`.
  *
- * Where a boundary day has no stored answer — every record written before this
- * existed — the whole day is treated as exempt, which is what those records
- * have always meant.
+ * Where the user's prayer location is known the boundary days are recomputed
+ * here instead, from the times that actually applied on those dates — so a
+ * cycle spanning a flight, or a calculation method changed afterwards, still
+ * reads correctly rather than against a cached answer.
+ *
+ * The stored answer is the fallback, and a whole-day exemption the fallback
+ * after that, which is what every record written before any of this means.
  */
 async function getExemptPrayers(userId, startDate, endDate) {
   const user = await User.findById(userId);
@@ -38,6 +43,9 @@ async function getExemptPrayers(userId, startDate, endDate) {
 
   const byDay = new Map();
   if (!exemptionEnabled) return byDay;
+
+  // Present once the app has reported where prayers are being timed for.
+  const location = prayerLocation(user);
 
   const periods = await PeriodTracking.find({
     user_id: userId,
@@ -69,10 +77,27 @@ async function getExemptPrayers(userId, startDate, endDate) {
       const isBoundary = day === p.start_date || day === p.end_date;
       const listed = boundaries[day];
 
-      if (isBoundary && Array.isArray(listed)) {
-        // Exactly the prayers the app said fell inside the window.
+      if (!isBoundary) {
+        addAll(day);
+        continue;
+      }
+
+      // Recompute from the times that applied on this date where we can,
+      // falling back to what the app recorded when the cycle was saved.
+      let names = null;
+      if (location) {
+        names = exemptPrayersOn(
+          day,
+          day === p.start_date ? p.start_at : null,
+          day === p.end_date ? p.end_at : null,
+          location
+        );
+      }
+      if (!names && Array.isArray(listed)) names = listed;
+
+      if (names) {
         const set = byDay.get(day) || new Set();
-        listed.forEach((name) => set.add(String(name).toLowerCase()));
+        names.forEach((name) => set.add(String(name).toLowerCase()));
         byDay.set(day, set);
       } else {
         addAll(day);
