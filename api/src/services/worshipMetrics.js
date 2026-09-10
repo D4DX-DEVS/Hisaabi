@@ -15,19 +15,29 @@ const { getCurrentDate, getDaysBetweenDates } = require('../utils/dateUtils');
 const FARDH_PRAYERS = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
 
 /**
- * Days in [startDate, endDate] on which the user is exempt from prayer
- * accountability because Personal Cycle was active.
+ * Which prayers the user is exempt from, per day, in [startDate, endDate].
  *
- * Only applies when the user opted into the feature; an in-progress cycle is
- * clamped to today so future provisional days are never pre-counted.
+ * Returns a Map of day string to a Set of prayer names. A day absent from the
+ * map has no exemption at all.
+ *
+ * A cycle is a window between two moments, so the day it begins and the day it
+ * ends are usually only partly exempt — prayers offered before it started, or
+ * after it ended, are ordinary prayers and count like any other. Only the app
+ * knows the user's prayer times, so it works those two days out and stores the
+ * answer on the record as `boundary_exemptions`.
+ *
+ * Where a boundary day has no stored answer — every record written before this
+ * existed — the whole day is treated as exempt, which is what those records
+ * have always meant.
  */
-async function getExemptDays(userId, startDate, endDate) {
+async function getExemptPrayers(userId, startDate, endDate) {
   const user = await User.findById(userId);
   const exemptionEnabled =
     user && user.gender === 'f' && user.settings && user.settings.female_settings &&
     user.settings.female_settings.maintain_streaks_during_period === true;
 
-  if (!exemptionEnabled) return new Set();
+  const byDay = new Map();
+  if (!exemptionEnabled) return byDay;
 
   const periods = await PeriodTracking.find({
     user_id: userId,
@@ -35,17 +45,57 @@ async function getExemptDays(userId, startDate, endDate) {
     end_date: { $gte: startDate },
   });
 
+  // Clamp to today: an in-progress cycle carries a provisional end date, so
+  // days that have not happened yet must not be counted as exempt.
   const today = getCurrentDate();
   const rangeEnd = endDate < today ? endDate : today;
 
-  const exemptDays = new Set();
+  const addAll = (day) => {
+    const set = byDay.get(day) || new Set();
+    FARDH_PRAYERS.forEach((p) => set.add(p));
+    byDay.set(day, set);
+  };
+
   for (const p of periods) {
-    const start = p.start_date > startDate ? p.start_date : startDate;
-    const end = p.end_date < rangeEnd ? p.end_date : rangeEnd;
-    if (start > end) continue;
-    getDaysBetweenDates(start, end).forEach((d) => exemptDays.add(d));
+    const from = p.start_date > startDate ? p.start_date : startDate;
+    const to = p.end_date < rangeEnd ? p.end_date : rangeEnd;
+    if (from > to) continue;
+
+    const boundaries = (p.boundary_exemptions && typeof p.boundary_exemptions === 'object')
+      ? p.boundary_exemptions
+      : {};
+
+    for (const day of getDaysBetweenDates(from, to)) {
+      const isBoundary = day === p.start_date || day === p.end_date;
+      const listed = boundaries[day];
+
+      if (isBoundary && Array.isArray(listed)) {
+        // Exactly the prayers the app said fell inside the window.
+        const set = byDay.get(day) || new Set();
+        listed.forEach((name) => set.add(String(name).toLowerCase()));
+        byDay.set(day, set);
+      } else {
+        addAll(day);
+      }
+    }
   }
-  return exemptDays;
+
+  return byDay;
+}
+
+/**
+ * Days touched by a cycle. Kept for the "N days exempt" figures, which count a
+ * partly-exempt boundary day the same as a full one.
+ */
+async function getExemptDays(userId, startDate, endDate) {
+  const byDay = await getExemptPrayers(userId, startDate, endDate);
+  return new Set(byDay.keys());
+}
+
+/** Whether one specific prayer on one day is exempt. */
+function isPrayerExempt(byDay, day, prayerName) {
+  const set = byDay.get(day);
+  return !!set && set.has(prayerName);
 }
 
 // ── Per-metric collectors ────────────────────────────────────────────
@@ -55,15 +105,17 @@ async function getExemptDays(userId, startDate, endDate) {
 // her cycle who reads Qur'an still gets the credit.
 
 async function countPrayers(userId, startDate, endDate, modes) {
-  const [records, exemptDays] = await Promise.all([
+  const [records, exemptByDay] = await Promise.all([
     PrayerTracking.find({ user_id: userId, date: { $gte: startDate, $lte: endDate } }),
-    getExemptDays(userId, startDate, endDate),
+    getExemptPrayers(userId, startDate, endDate),
   ]);
   let count = 0;
   for (const record of records) {
-    if (exemptDays.has(record.date)) continue;
     const fp = record.fardh_prayers || {};
     for (const p of FARDH_PRAYERS) {
+      // A prayer offered outside the cycle counts like any other, even on the
+      // day the cycle began or ended.
+      if (isPrayerExempt(exemptByDay, record.date, p)) continue;
       if (fp[p] !== true) continue;
       const mode = fp[`${p}_m`];
       if (!modes || modes.includes(mode)) count++;
@@ -189,6 +241,8 @@ async function computeMetrics(userId, metrics, startDate, endDate) {
 module.exports = {
   FARDH_PRAYERS,
   getExemptDays,
+  getExemptPrayers,
+  isPrayerExempt,
   computeMetric,
   computeMetrics,
   countGoodDeeds,

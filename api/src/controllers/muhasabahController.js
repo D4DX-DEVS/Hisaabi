@@ -1,5 +1,5 @@
 const { Muhasabah } = require('../models');
-const { computeMetrics, getExemptDays, FARDH_PRAYERS } = require('../services/worshipMetrics');
+const { computeMetrics, getExemptPrayers, isPrayerExempt, FARDH_PRAYERS } = require('../services/worshipMetrics');
 const { PrayerTracking } = require('../models');
 const { getCurrentDate, getDaysBetweenDates } = require('../utils/dateUtils');
 
@@ -33,7 +33,7 @@ async function buildWeeklySummary(userId, weekStart, weekEnd) {
   }
 
   const days = getDaysBetweenDates(weekStart, effectiveEnd);
-  const [metrics, exemptDays, prayerRecords] = await Promise.all([
+  const [metrics, exemptByDay, prayerRecords] = await Promise.all([
     computeMetrics(
       userId,
       [
@@ -53,7 +53,7 @@ async function buildWeeklySummary(userId, weekStart, weekEnd) {
       weekStart,
       effectiveEnd
     ),
-    getExemptDays(userId, weekStart, effectiveEnd),
+    getExemptPrayers(userId, weekStart, effectiveEnd),
     PrayerTracking.find({ user_id: userId, date: { $gte: weekStart, $lte: effectiveEnd } }),
   ]);
 
@@ -63,11 +63,10 @@ async function buildWeeklySummary(userId, weekStart, weekEnd) {
   let completed = 0;
   let expected = 0;
   for (const day of days) {
-    const isExempt = exemptDays.has(day);
     const fp = (byDate[day] && byDate[day].fardh_prayers) || {};
     for (const p of FARDH_PRAYERS) {
       const done = fp[p] === true;
-      if (isExempt && !done) continue;
+      if (isPrayerExempt(exemptByDay, day, p) && !done) continue;
       expected++;
       if (done) completed++;
     }
@@ -79,7 +78,7 @@ async function buildWeeklySummary(userId, weekStart, weekEnd) {
       completed,
       expected,
       percent: expected ? Math.round((completed / expected) * 100) : 0,
-      exempt_days: exemptDays.size,
+      exempt_days: exemptByDay.size,
     },
     ...metrics,
   };

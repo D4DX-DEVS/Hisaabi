@@ -17,6 +17,17 @@ const periodTrackingSchema = new mongoose.Schema(
     // the start and end of the day in that case.
     start_at: { type: Date, default: null },
     end_at: { type: Date, default: null },
+    // Which prayers are exempt on the two boundary days, keyed by date:
+    //   { '2026-09-10': ['asr','maghrib','isha'] }
+    //
+    // Only the app knows the user's prayer times, so it works out which
+    // prayers fall inside the window on the day the cycle starts and the day
+    // it ends, and sends the answer here. Every day in between is exempt in
+    // full and is not listed.
+    //
+    // Absent for a day means that whole day is exempt — the lenient
+    // behaviour every record had before this existed.
+    boundary_exemptions: { type: mongoose.Schema.Types.Mixed, default: {} },
     notes: { type: String, default: null },
   },
   {

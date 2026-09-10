@@ -28,6 +28,22 @@ function dayOf(moment) {
   return `${y}-${m}-${d}`;
 }
 
+/**
+ * Keep only what we understand: a date mapped to a list of prayer names.
+ * Anything else is dropped rather than rejected, so a client sending an
+ * unexpected shape cannot fail the whole request.
+ */
+function normaliseBoundaries(raw) {
+  if (!raw || typeof raw !== 'object') return {};
+  const out = {};
+  for (const [day, prayers] of Object.entries(raw)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
+    if (!Array.isArray(prayers)) continue;
+    out[day] = prayers.map((n) => String(n).toLowerCase());
+  }
+  return out;
+}
+
 function serialize(record) {
   return {
     id: record._id,
@@ -35,6 +51,7 @@ function serialize(record) {
     end_date: record.end_date,
     start_at: record.start_at,
     end_at: record.end_at,
+    boundary_exemptions: record.boundary_exemptions || {},
     notes: record.notes,
     created_at: record.created_at,
   };
@@ -64,7 +81,7 @@ async function addPeriod(req, res, next) {
   try {
     if (!requireFemale(req, res)) return;
     const userId = req.user._id;
-    const { start_date, end_date, notes, start_at, end_at } = req.body;
+    const { start_date, end_date, notes, start_at, end_at, boundary_exemptions } = req.body;
 
     if (!start_date || !end_date) {
       return res.status(400).json({ error: 'start_date and end_date are required' });
@@ -100,6 +117,7 @@ async function addPeriod(req, res, next) {
       end_date: resolvedEndDate,
       start_at: startMoment,
       end_at: endMoment,
+      boundary_exemptions: normaliseBoundaries(boundary_exemptions),
       notes: notes || null,
     });
     return res.status(200).json({ success: true, period: serialize(record) });
@@ -113,7 +131,7 @@ async function updatePeriod(req, res, next) {
     if (!requireFemale(req, res)) return;
     const userId = req.user._id;
     const { id } = req.params;
-    const { start_date, end_date, notes, start_at, end_at } = req.body;
+    const { start_date, end_date, notes, start_at, end_at, boundary_exemptions } = req.body;
 
     const record = await PeriodTracking.findOne({ _id: id, user_id: userId });
     if (!record) return res.status(404).json({ error: 'Period record not found' });
@@ -137,6 +155,11 @@ async function updatePeriod(req, res, next) {
     if (end_at !== undefined || end_date) {
       record.end_at = resolveMoment(end_at, record.end_date, 'end');
     }
+    if (boundary_exemptions !== undefined) {
+      record.boundary_exemptions = normaliseBoundaries(boundary_exemptions);
+      record.markModified('boundary_exemptions');
+    }
+
     if (record.start_at && record.end_at && record.start_at > record.end_at) {
       return res.status(400).json({ error: 'The cycle cannot end before it starts' });
     }

@@ -1,38 +1,9 @@
 const { PrayerTracking, ActivityLog, User, PeriodTracking } = require('../models');
 const { queueStreakUpdate } = require('../services/streakQueueService');
 const { getCurrentDate, getDaysBetweenDates, getMonthDateRange } = require('../utils/dateUtils');
+const { getExemptPrayers, isPrayerExempt } = require('../services/worshipMetrics');
 
 const FARDH_PRAYERS = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
-
-async function getExemptDays(userId, startDate, endDate) {
-  const user = await User.findById(userId);
-  const exemptionEnabled =
-    user && user.gender === 'f' && user.settings && user.settings.female_settings &&
-    user.settings.female_settings.maintain_streaks_during_period === true;
-
-  if (!exemptionEnabled) return new Set();
-
-  const periods = await PeriodTracking.find({
-    user_id: userId,
-    start_date: { $lte: endDate },
-    end_date: { $gte: startDate },
-  });
-
-  // Clamp to today: an in-progress cycle is stored with a provisional end date
-  // (start + 5 days) until the user ends it, so days that haven't happened yet
-  // must not be counted as exempt.
-  const today = getCurrentDate();
-  const rangeEnd = endDate < today ? endDate : today;
-
-  const exemptDays = new Set();
-  for (const p of periods) {
-    const start = p.start_date > startDate ? p.start_date : startDate;
-    const end = p.end_date < rangeEnd ? p.end_date : rangeEnd;
-    if (start > end) continue;
-    getDaysBetweenDates(start, end).forEach((d) => exemptDays.add(d));
-  }
-  return exemptDays;
-}
 
 async function getPrayerTracking(req, res, next) {
   try {
@@ -177,8 +148,8 @@ async function getFardhPrayerAnalysis(req, res, next) {
 
     const days = getDaysBetweenDates(startDate, endDate);
     const totalDays = days.length;
-    const exemptDays = await getExemptDays(userId, startDate, endDate);
-    const eligibleDays = totalDays - exemptDays.size;
+    const exemptByDay = await getExemptPrayers(userId, startDate, endDate);
+    const eligibleDays = totalDays - exemptByDay.size;
 
     const recordsByDate = {};
     for (const record of records) recordsByDate[record.date] = record;
@@ -189,13 +160,13 @@ async function getFardhPrayerAnalysis(req, res, next) {
     }
 
     for (const day of days) {
-      const dayIsExempt = exemptDays.has(day);
       const fp = (recordsByDate[day] && recordsByDate[day].fardh_prayers) || {};
       for (const p of FARDH_PRAYERS) {
         const wasCompleted = fp[p] === true;
-        if (dayIsExempt && !wasCompleted) {
-          // Genuinely exempt for this prayer — the cycle was already active
-          // and she never prayed it, so it's excluded entirely (not missed).
+        // Exemption is per prayer, not per day: on the day a cycle began or
+        // ended, only the prayers that actually fell inside the window are
+        // excluded. The rest count normally, missed ones included.
+        if (isPrayerExempt(exemptByDay, day, p) && !wasCompleted) {
           prayerStats[p].exempt++;
           continue;
         }
@@ -246,7 +217,7 @@ async function getFardhPrayerAnalysis(req, res, next) {
       year: yr || null,
       month: mo || null,
       eligible_days: eligibleDays,
-      exempt_days: exemptDays.size,
+      exempt_days: exemptByDay.size,
       analysis: { overall, prayers: prayerStats },
     });
   } catch (err) {

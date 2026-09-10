@@ -1,6 +1,6 @@
 const { GroupChallenge, GroupGoal, GroupFeedEvent, GroupReminder, User } = require('../models');
 const { requireMembership, emitFeedEvent } = require('./groupChallengeController');
-const { computeMetrics, getExemptDays, FARDH_PRAYERS } = require('../services/worshipMetrics');
+const { computeMetrics, getExemptPrayers, isPrayerExempt, FARDH_PRAYERS } = require('../services/worshipMetrics');
 const { PrayerTracking } = require('../models');
 const {
   SHAREABLE,
@@ -38,9 +38,9 @@ async function memberContribution(user, groupId, startDate, endDate) {
 }
 
 async function memberPrayerPercent(userId, startDate, endDate) {
-  const [records, exemptDays] = await Promise.all([
+  const [records, exemptByDay] = await Promise.all([
     PrayerTracking.find({ user_id: userId, date: { $gte: startDate, $lte: endDate } }),
-    getExemptDays(userId, startDate, endDate),
+    getExemptPrayers(userId, startDate, endDate),
   ]);
   const byDate = {};
   for (const r of records) byDate[r.date] = r;
@@ -48,11 +48,10 @@ async function memberPrayerPercent(userId, startDate, endDate) {
   let done = 0;
   let expected = 0;
   for (const day of getDaysBetweenDates(startDate, endDate)) {
-    const isExempt = exemptDays.has(day);
     const fp = (byDate[day] && byDate[day].fardh_prayers) || {};
     for (const p of FARDH_PRAYERS) {
       const completed = fp[p] === true;
-      if (isExempt && !completed) continue;
+      if (isPrayerExempt(exemptByDay, day, p) && !completed) continue;
       expected++;
       if (completed) done++;
     }
