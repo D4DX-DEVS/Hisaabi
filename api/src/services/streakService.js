@@ -124,7 +124,7 @@ async function upsertStreak(userId, streakType, currentStreak, lastActivityDate)
 async function updatePrayerStreak(userId) {
   const user = await require('../models').User.findById(userId);
   const isFemaleMaintain =
-    user && user.gender === 'f' && user.settings && user.settings.female_settings &&
+    user && user.settings && user.settings.female_settings &&
     user.settings.female_settings.maintain_streaks_during_period === true;
 
   const streak = await calculateStreak(
@@ -145,7 +145,7 @@ async function updatePrayerStreak(userId) {
 async function updateQuranStreak(userId) {
   const user = await require('../models').User.findById(userId);
   const isFemaleMaintain =
-    user && user.gender === 'f' && user.settings && user.settings.female_settings &&
+    user && user.settings && user.settings.female_settings &&
     user.settings.female_settings.maintain_streaks_during_period === true;
 
   const streak = await calculateStreak(
@@ -166,7 +166,7 @@ async function updateQuranStreak(userId) {
 async function updateDhikrStreak(userId) {
   const user = await require('../models').User.findById(userId);
   const isFemaleMaintain =
-    user && user.gender === 'f' && user.settings && user.settings.female_settings &&
+    user && user.settings && user.settings.female_settings &&
     user.settings.female_settings.maintain_streaks_during_period === true;
 
   const streak = await calculateStreak(
@@ -187,7 +187,7 @@ async function updateDhikrStreak(userId) {
 async function updateCombinedStreak(userId) {
   const user = await require('../models').User.findById(userId);
   const isFemaleMaintain =
-    user && user.gender === 'f' && user.settings && user.settings.female_settings &&
+    user && user.settings && user.settings.female_settings &&
     user.settings.female_settings.maintain_streaks_during_period === true;
 
   const [prayerDates, quranDates, dhikrDates] = await Promise.all([

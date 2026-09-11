@@ -37,8 +37,11 @@ const FARDH_PRAYERS = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
  */
 async function getExemptPrayers(userId, startDate, endDate) {
   const user = await User.findById(userId);
+  // Gated on the user's own opt-in, not on a gender field — someone who has
+  // turned this on and recorded a cycle gets the exemption regardless of
+  // what her profile's gender says, or whether it's set at all.
   const exemptionEnabled =
-    user && user.gender === 'f' && user.settings && user.settings.female_settings &&
+    user && user.settings && user.settings.female_settings &&
     user.settings.female_settings.maintain_streaks_during_period === true;
 
   const byDay = new Map();

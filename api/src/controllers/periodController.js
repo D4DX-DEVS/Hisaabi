@@ -1,4 +1,5 @@
 const { PeriodTracking } = require('../models');
+const { encryptField, decryptField } = require('../services/fieldEncryption');
 
 /**
  * Resolve the moment a cycle starts or ends.
@@ -52,14 +53,24 @@ function serialize(record) {
     start_at: record.start_at,
     end_at: record.end_at,
     boundary_exemptions: record.boundary_exemptions || {},
-    notes: record.notes,
+    notes: decryptField(record.notes),
     created_at: record.created_at,
   };
 }
 
-function requireFemale(req, res) {
-  if (req.user.gender !== 'f') {
-    res.status(403).json({ error: 'This feature is only available for female users' });
+/**
+ * Gate on the user's own opt-in, not on gender. The FR is explicit that
+ * Personal Cycle Mode must never assume or infer who it's for — gender is
+ * only ever known once a user fills in their profile, and gating here on
+ * it meant a brand-new account (gender unset by default) could flip the
+ * "Enable Personal Cycle Mode" toggle in Settings and have every actual
+ * period endpoint keep rejecting her anyway. The toggle itself is now the
+ * real gate, exactly matching the FR's own Step 1 -> Step 2 flow.
+ */
+function requirePeriodTrackingEnabled(req, res) {
+  const enabled = req.user.settings?.female_settings?.period_tracking === true;
+  if (!enabled) {
+    res.status(403).json({ error: 'Enable Personal Cycle Mode in Settings first' });
     return false;
   }
   return true;
@@ -67,7 +78,7 @@ function requireFemale(req, res) {
 
 async function getPeriodHistory(req, res, next) {
   try {
-    if (!requireFemale(req, res)) return;
+    if (!requirePeriodTrackingEnabled(req, res)) return;
     const userId = req.user._id;
     const records = await PeriodTracking.find({ user_id: userId }).sort({ start_date: -1 });
     const periods = records.map(serialize);
@@ -79,7 +90,7 @@ async function getPeriodHistory(req, res, next) {
 
 async function addPeriod(req, res, next) {
   try {
-    if (!requireFemale(req, res)) return;
+    if (!requirePeriodTrackingEnabled(req, res)) return;
     const userId = req.user._id;
     const { start_date, end_date, notes, start_at, end_at, boundary_exemptions } = req.body;
 
@@ -118,7 +129,7 @@ async function addPeriod(req, res, next) {
       start_at: startMoment,
       end_at: endMoment,
       boundary_exemptions: normaliseBoundaries(boundary_exemptions),
-      notes: notes || null,
+      notes: encryptField(notes || null),
     });
     return res.status(200).json({ success: true, period: serialize(record) });
   } catch (err) {
@@ -128,7 +139,7 @@ async function addPeriod(req, res, next) {
 
 async function updatePeriod(req, res, next) {
   try {
-    if (!requireFemale(req, res)) return;
+    if (!requirePeriodTrackingEnabled(req, res)) return;
     const userId = req.user._id;
     const { id } = req.params;
     const { start_date, end_date, notes, start_at, end_at, boundary_exemptions } = req.body;
@@ -145,7 +156,7 @@ async function updatePeriod(req, res, next) {
 
     if (start_date) record.start_date = start_date;
     if (end_date) record.end_date = end_date;
-    if (notes !== undefined) record.notes = notes;
+    if (notes !== undefined) record.notes = encryptField(notes);
 
     // Re-resolve a moment whenever its timestamp or its day changes, so
     // editing the date never leaves a stale time behind on the other field.
@@ -174,7 +185,7 @@ async function updatePeriod(req, res, next) {
 
 async function removePeriod(req, res, next) {
   try {
-    if (!requireFemale(req, res)) return;
+    if (!requirePeriodTrackingEnabled(req, res)) return;
     const userId = req.user._id;
     const { id } = req.params;
 
