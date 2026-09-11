@@ -62,28 +62,31 @@ async function participantProgress(challenge, participant) {
 /**
  * Serialize a challenge for the client.
  *
- * Member names are included only so participants can be listed; progress is
- * a single number per person and there is deliberately no ordering, ranking
- * or "top performer" field — the FR forbids competitive framing.
+ * Individual progress numbers never leave this function except as the
+ * caller's own (my_progress/my_percent) and the group-wide aggregate
+ * (group_percent) — the FR forbids competitive framing, and a per-person
+ * breakdown in the response would let any client build its own leaderboard
+ * even though nothing in the app renders one today. `participants` only
+ * says who is taking part, the same membership info the group's Members
+ * tab already shows everyone.
  */
 async function serializeChallenge(challenge, userMap, currentUserId) {
-  const participants = await Promise.all(
+  const withProgress = await Promise.all(
     (challenge.participants || []).map(async (p) => {
       const progress = await participantProgress(challenge, p);
-      const u = userMap[p.user_id.toString()];
-      return {
-        user_id: p.user_id,
-        name: u ? u.name : null,
-        progress,
-        percent: challenge.target ? Math.min(100, Math.round((progress / challenge.target) * 100)) : 0,
-        completed: progress >= challenge.target,
-        joined_at: p.joined_at,
-      };
+      const percent = challenge.target ? Math.min(100, Math.round((progress / challenge.target) * 100)) : 0;
+      return { user_id: p.user_id, joined_at: p.joined_at, progress, percent, completed: progress >= challenge.target };
     })
   );
 
-  const completedCount = participants.filter((p) => p.completed).length;
-  const me = participants.find((p) => p.user_id.toString() === currentUserId.toString());
+  const completedCount = withProgress.filter((p) => p.completed).length;
+  const me = withProgress.find((p) => p.user_id.toString() === currentUserId.toString());
+
+  const participants = withProgress.map((p) => ({
+    user_id: p.user_id,
+    name: userMap[p.user_id.toString()]?.name || null,
+    joined_at: p.joined_at,
+  }));
 
   return {
     id: challenge._id,
@@ -99,9 +102,9 @@ async function serializeChallenge(challenge, userMap, currentUserId) {
     participant_count: participants.length,
     completed_count: completedCount,
     // Group-level completion share — the collective picture, not a ranking.
-    group_percent: participants.length
+    group_percent: withProgress.length
       ? Math.round(
-          participants.reduce((s, p) => s + p.percent, 0) / participants.length
+          withProgress.reduce((s, p) => s + p.percent, 0) / withProgress.length
         )
       : 0,
     joined: !!me,
