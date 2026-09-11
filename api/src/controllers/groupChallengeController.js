@@ -1,7 +1,25 @@
 const { Group, GroupChallenge, GroupGoal, GroupFeedEvent, User } = require('../models');
 const { computeMetric } = require('../services/worshipMetrics');
-const { appearsInFeed } = require('../services/groupPrivacy');
+const { appearsInFeed, groupPrefs } = require('../services/groupPrivacy');
+const { sendToUser } = require('../services/oneSignal');
 const { METRICS } = require('../models/WorshipGoal');
+
+/**
+ * Push a notification to one member of a group, honouring their mute
+ * setting for that specific group. Never throws — a failed or skipped
+ * send must not break whatever action triggered it (a reaction, a
+ * completed goal, a reminder).
+ */
+async function notifyGroupMember(userId, groupId, message) {
+  try {
+    const recipient = await User.findById(userId);
+    if (!recipient) return;
+    if (groupPrefs(recipient, groupId).muted) return;
+    await sendToUser(userId, message);
+  } catch (err) {
+    // Intentionally swallowed — see above.
+  }
+}
 
 function isGroupAdmin(group, userId) {
   const uid = userId.toString();
@@ -295,6 +313,14 @@ async function reportChallengeProgress(req, res, next) {
 
     if (justCompleted) {
       await emitFeedEvent(group._id, req.user, 'challenge_completed', { title: challenge.name });
+      notifyGroupMember(req.user._id, group._id, {
+        title: group.name,
+        body: `You completed "${challenge.name}" 🎉`,
+        // 'challenge_completion' matches the app's own per-type mute toggle
+        // (TrackerReminderType.challengeCompletion) — anything else falls
+        // through to "always allowed" there and ignores that setting.
+        data: { type: 'challenge_completion', group_id: group.group_id, challenge_id: challenge._id.toString() },
+      });
     }
 
     return res.status(200).json({
@@ -433,6 +459,15 @@ async function contributeToGroupGoal(req, res, next) {
     const after = Object.values(contributions).reduce((s, v) => s + (Number(v) || 0), 0);
     if (before < goal.target && after >= goal.target) {
       await emitFeedEvent(group._id, req.user, 'group_goal_reached', { title: goal.title });
+      // A group goal is reached together — everyone in the group hears
+      // about it, not just whoever's contribution tipped it over.
+      for (const memberId of group.users) {
+        notifyGroupMember(memberId, group._id, {
+          title: group.name,
+          body: `The group reached "${goal.title}" together 🎉`,
+          data: { type: 'group_goal_reached', group_id: group.group_id, goal_id: goal._id.toString() },
+        });
+      }
     }
 
     const memberIds = group.users.map((u) => u.toString());
@@ -498,6 +533,7 @@ module.exports = {
   isGroupAdmin,
   requireMembership,
   emitFeedEvent,
+  notifyGroupMember,
   listChallenges,
   createChallenge,
   updateChallenge,

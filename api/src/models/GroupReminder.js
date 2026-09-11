@@ -18,6 +18,10 @@ const groupReminderSchema = new mongoose.Schema(
     day_of_week: { type: Number, default: null, min: 1, max: 7 },
     send_at: { type: Date, default: Date.now },
     active: { type: Boolean, default: true },
+    // When this reminder last actually pushed a notification — dedupes a
+    // 'once' reminder to a single send, and a daily/weekly one to once per
+    // occurrence rather than once per minute the scheduler happens to match.
+    last_sent_at: { type: Date, default: null },
   },
   {
     timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },

@@ -134,6 +134,7 @@ const server = app.listen(PORT, async () => {
   console.log(`🚀 Hisabi API running on port ${PORT}`);
   console.log(`📖 Docs: http://localhost:${PORT}/api-docs`);
   await connectDB();
+  require('./services/groupReminderScheduler').start();
 });
 
 module.exports = { app, server };

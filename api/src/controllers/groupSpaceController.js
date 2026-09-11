@@ -1,5 +1,5 @@
 const { GroupChallenge, GroupGoal, GroupFeedEvent, GroupReminder, User } = require('../models');
-const { requireMembership, emitFeedEvent } = require('./groupChallengeController');
+const { requireMembership, emitFeedEvent, notifyGroupMember } = require('./groupChallengeController');
 const { computeMetrics, getExemptPrayers, isPrayerExempt, FARDH_PRAYERS } = require('../services/worshipMetrics');
 const { PrayerTracking } = require('../models');
 const {
@@ -14,6 +14,14 @@ const {
 const { weekBounds } = require('./muhasabahController');
 const { getCurrentDate, getDaysBetweenDates } = require('../utils/dateUtils');
 const { REACTIONS } = require('../models/GroupFeedEvent');
+
+const REACTION_LABELS = {
+  mashaallah: 'MashaAllah',
+  may_allah_accept: 'May Allah accept',
+  keep_going: 'Keep going',
+  well_done: 'Well done',
+  jazakallahu_khairan: 'JazakAllahu Khairan',
+};
 
 /**
  * One member's contribution to the group aggregate, for the categories they
@@ -214,6 +222,16 @@ async function reactToEvent(req, res, next) {
 
     const counts = {};
     for (const r of event.reactions) counts[r.reaction] = (counts[r.reaction] || 0) + 1;
+
+    // Let the person who posted know someone encouraged them — unless
+    // they're reacting to their own activity, or they've muted the group.
+    if (reaction && event.user_id.toString() !== uid) {
+      notifyGroupMember(event.user_id, group._id, {
+        title: group.name,
+        body: `${req.user.name} sent you "${REACTION_LABELS[reaction] || reaction}"`,
+        data: { type: 'group_encouragement', group_id: group.group_id, event_id: event._id.toString() },
+      });
+    }
 
     return res.status(200).json({ success: true, reaction_counts: counts, my_reaction: reaction || null });
   } catch (err) {
