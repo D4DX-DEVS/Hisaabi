@@ -8,6 +8,7 @@ const {
   GoodDeedLog,
   WorshipGoal,
   Muhasabah,
+  QuranMemorization,
 } = require('../models');
 const { computeMetrics, getExemptPrayers, isPrayerExempt, FARDH_PRAYERS } = require('../services/worshipMetrics');
 const { goalWithProgress } = require('./worshipGoalController');
@@ -60,6 +61,7 @@ async function getDashboard(req, res, next) {
       goals,
       exemptByDay,
       allQuranRecords,
+      quranMemorization,
     ] = await Promise.all([
       PrayerTracking.findOne({ user_id: userId, date }),
       QuranReading.findOne({ user_id: userId, date }),
@@ -73,6 +75,7 @@ async function getDashboard(req, res, next) {
       // Lifetime, not scoped to `date` — "surahs completed" is a standing
       // accomplishment, not a daily figure.
       QuranReading.find({ user_id: userId }).select('pages_read'),
+      QuranMemorization.findOne({ user_id: userId }),
     ]);
 
     const isExempt = exemptByDay.has(date);
@@ -116,6 +119,19 @@ async function getDashboard(req, res, next) {
       goal: goalSettings.quran_pages || null,
       surahs_completed: countCompletedSurahs(allReadPages),
       surahs_total: SURAH_PAGES.length,
+    };
+
+    // ── Ayah memorization ── (mirrors goalsController.computeGoalProgress's
+    // quran_ayahs block exactly, so the two never disagree on the same day)
+    const ayahsMemorizedToday = quranMemorization
+      ? quranMemorization.memorized_ayahs.filter((a) => {
+          const d = new Date(a.memorized_at);
+          return d.toISOString().split('T')[0] === date;
+        }).length
+      : 0;
+    const ayahMemorizationSection = {
+      memorized_today: ayahsMemorizedToday,
+      goal: goalSettings.quran_ayahs || null,
     };
 
     // ── Dhikr ──
@@ -209,6 +225,7 @@ async function getDashboard(req, res, next) {
       is_exempt: isExempt,
       prayers: prayerSection,
       quran: quranSection,
+      ayah_memorization: ayahMemorizationSection,
       dhikr: dhikrSection,
       adhkar: adhkarSection,
       dua: duaSection,
