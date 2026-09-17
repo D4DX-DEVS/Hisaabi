@@ -13,6 +13,7 @@ const { computeMetrics, getExemptPrayers, isPrayerExempt, FARDH_PRAYERS } = requ
 const { goalWithProgress } = require('./worshipGoalController');
 const { weekBounds } = require('./muhasabahController');
 const { getCurrentDate, getDaysBetweenDates, getMonthDateRange } = require('../utils/dateUtils');
+const { SURAH_PAGES, countCompletedSurahs } = require('../data/quranSurahPages');
 
 /**
  * Weights for the single "overall progress" number on the Today screen.
@@ -58,6 +59,7 @@ async function getDashboard(req, res, next) {
       deedRecords,
       goals,
       exemptByDay,
+      allQuranRecords,
     ] = await Promise.all([
       PrayerTracking.findOne({ user_id: userId, date }),
       QuranReading.findOne({ user_id: userId, date }),
@@ -68,6 +70,9 @@ async function getDashboard(req, res, next) {
       GoodDeedLog.find({ user_id: userId, date }),
       WorshipGoal.find({ user_id: userId, active: true }),
       getExemptPrayers(userId, date, date),
+      // Lifetime, not scoped to `date` — "surahs completed" is a standing
+      // accomplishment, not a daily figure.
+      QuranReading.find({ user_id: userId }).select('pages_read'),
     ]);
 
     const isExempt = exemptByDay.has(date);
@@ -99,12 +104,18 @@ async function getDashboard(req, res, next) {
 
     // ── Qur'an ──
     const pagesRead = (quranRecord && quranRecord.pages_read) || [];
+    const allReadPages = new Set();
+    for (const r of allQuranRecords) {
+      for (const p of r.pages_read || []) allReadPages.add(p);
+    }
     const quranSection = {
       pages_read: pagesRead.length,
       pages: pagesRead,
       last_read_page: (quranRecord && quranRecord.last_read_page) || null,
       duration_minutes: (quranRecord && quranRecord.duration_minutes) || 0,
       goal: goalSettings.quran_pages || null,
+      surahs_completed: countCompletedSurahs(allReadPages),
+      surahs_total: SURAH_PAGES.length,
     };
 
     // ── Dhikr ──

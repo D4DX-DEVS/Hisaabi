@@ -9,12 +9,24 @@ const { METRICS } = require('../models/WorshipGoal');
  * setting for that specific group. Never throws — a failed or skipped
  * send must not break whatever action triggered it (a reaction, a
  * completed goal, a reminder).
+ *
+ * The "Group reminders" on/off toggle and the "important only" frequency
+ * option only apply to admin-sent group_reminder pushes — a reaction or a
+ * challenge/goal completion is personal to the recipient and isn't what
+ * either of those settings describe muting. 'daily_digest' has no batching
+ * mechanism to hold a reminder for yet, so it's delivered immediately
+ * rather than silently dropped — the user would otherwise never see it.
  */
 async function notifyGroupMember(userId, groupId, message) {
   try {
     const recipient = await User.findById(userId);
     if (!recipient) return;
-    if (groupPrefs(recipient, groupId).muted) return;
+    const prefs = groupPrefs(recipient, groupId);
+    if (prefs.muted) return;
+    if (message.data?.type === 'group_reminder') {
+      if (!prefs.reminders) return;
+      if (prefs.frequency === 'important_only') return;
+    }
     await sendToUser(userId, message);
   } catch (err) {
     // Intentionally swallowed — see above.
