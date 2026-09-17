@@ -135,6 +135,7 @@ const server = app.listen(PORT, async () => {
   console.log(`📖 Docs: http://localhost:${PORT}/api-docs`);
   await connectDB();
   require('./services/groupReminderScheduler').start();
+  require('./services/challengeReminderScheduler').start();
 });
 
 module.exports = { app, server };
