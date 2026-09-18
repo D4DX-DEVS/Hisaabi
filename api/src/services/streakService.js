@@ -1,4 +1,4 @@
-const { PrayerTracking, QuranReading, DhikrTracking, PeriodTracking, Streak } = require('../models');
+const { PrayerTracking, QuranReading, DhikrTracking, AdhkarTracking, PeriodTracking, Streak } = require('../models');
 const { getCurrentDate, getDaysBetweenDates, formatDate } = require('../utils/dateUtils');
 
 /**
@@ -87,6 +87,22 @@ async function getDhikrActivityDates(userId) {
       return Object.values(counts).some((v) => v > 0);
     })
     .map((r) => r.date);
+}
+
+/**
+ * Get morning adhkar activity dates for a user
+ */
+async function getMorningAdhkarActivityDates(userId) {
+  const records = await AdhkarTracking.find({ user_id: userId, morning: true });
+  return records.map((r) => r.date);
+}
+
+/**
+ * Get evening adhkar activity dates for a user
+ */
+async function getEveningAdhkarActivityDates(userId) {
+  const records = await AdhkarTracking.find({ user_id: userId, evening: true });
+  return records.map((r) => r.date);
 }
 
 /**
@@ -182,6 +198,48 @@ async function updateDhikrStreak(userId) {
 }
 
 /**
+ * Update morning adhkar streak
+ */
+async function updateMorningAdhkarStreak(userId) {
+  const user = await require('../models').User.findById(userId);
+  const isFemaleMaintain =
+    user && user.settings && user.settings.female_settings &&
+    user.settings.female_settings.maintain_streaks_during_period === true;
+
+  const streak = await calculateStreak(
+    userId,
+    'morning_adhkar',
+    () => getMorningAdhkarActivityDates(userId),
+    isFemaleMaintain
+  );
+
+  const lastRecord = await AdhkarTracking.findOne({ user_id: userId, morning: true }).sort({ date: -1 });
+  const lastDate = lastRecord ? new Date(lastRecord.date) : null;
+  return await upsertStreak(userId, 'morning_adhkar', streak, lastDate);
+}
+
+/**
+ * Update evening adhkar streak
+ */
+async function updateEveningAdhkarStreak(userId) {
+  const user = await require('../models').User.findById(userId);
+  const isFemaleMaintain =
+    user && user.settings && user.settings.female_settings &&
+    user.settings.female_settings.maintain_streaks_during_period === true;
+
+  const streak = await calculateStreak(
+    userId,
+    'evening_adhkar',
+    () => getEveningAdhkarActivityDates(userId),
+    isFemaleMaintain
+  );
+
+  const lastRecord = await AdhkarTracking.findOne({ user_id: userId, evening: true }).sort({ date: -1 });
+  const lastDate = lastRecord ? new Date(lastRecord.date) : null;
+  return await upsertStreak(userId, 'evening_adhkar', streak, lastDate);
+}
+
+/**
  * Update combined streak (prayer OR quran OR dhikr)
  */
 async function updateCombinedStreak(userId) {
@@ -215,13 +273,15 @@ async function updateCombinedStreak(userId) {
  * Update all streaks for a user
  */
 async function updateAllStreaks(userId) {
-  const [prayer, quran, dhikr, combined] = await Promise.all([
+  const [prayer, quran, dhikr, morningAdhkar, eveningAdhkar, combined] = await Promise.all([
     updatePrayerStreak(userId),
     updateQuranStreak(userId),
     updateDhikrStreak(userId),
+    updateMorningAdhkarStreak(userId),
+    updateEveningAdhkarStreak(userId),
     updateCombinedStreak(userId),
   ]);
-  return { prayer, quran, dhikr, combined };
+  return { prayer, quran, dhikr, morning_adhkar: morningAdhkar, evening_adhkar: eveningAdhkar, combined };
 }
 
 /**
@@ -244,6 +304,8 @@ module.exports = {
   updatePrayerStreak,
   updateQuranStreak,
   updateDhikrStreak,
+  updateMorningAdhkarStreak,
+  updateEveningAdhkarStreak,
   updateCombinedStreak,
   updateAllStreaks,
   getAllStreaks,
