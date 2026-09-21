@@ -26,6 +26,7 @@ const groupRoutes = require('./routes/groupRoutes');
 const groupActivityRoutes = require('./routes/groupActivityRoutes');
 const contentRoutes = require('./routes/contentRoutes');
 const adminRoutes = require('./routes/adminRoutes');
+const aiAssistantRoutes = require('./routes/aiAssistantRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -97,6 +98,7 @@ app.use('/api/goals', goalsRoutes);
 app.use('/api/groups', groupRoutes);
 app.use('/api/group-activities', groupActivityRoutes);
 app.use('/api/content', contentRoutes);
+app.use('/api/ai-assistant', aiAssistantRoutes);
 app.use('/api/admin', adminRoutes);
 
 // ── Public Live Links (no auth required) ──────────────────────────────────────
