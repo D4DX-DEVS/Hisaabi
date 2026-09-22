@@ -1,14 +1,16 @@
 /**
- * Proxies chat-completion requests to OpenRouter so the API key never ships
- * inside the client app. The client still owns the conversation history,
- * system prompt, tool definitions, and the tool-calling loop — this is only
- * the one network hop that needs a secret, moved server-side.
+ * Proxies chat-completion requests to Google's Gemini API directly so the
+ * API key never ships inside the client app. The client still speaks the
+ * OpenAI-compatible shape it always has (messages / tools / tool_calls) —
+ * geminiTranslator converts to and from Gemini's native request/response
+ * shape here, so switching off OpenRouter never touched the Flutter side's
+ * conversation history or tool-calling loop.
  */
 const { checkAndRecord } = require('../services/aiRateLimiter');
+const { toGeminiTools, toGeminiPayload, fromGeminiResponse } = require('../services/geminiTranslator');
 
-const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const API_KEY = process.env.OPENROUTER_API_KEY;
-const DEFAULT_MODEL = 'google/gemini-2.5-flash';
+const API_KEY = process.env.GEMINI_API_KEY;
+const DEFAULT_MODEL = 'gemini-3.6-flash';
 
 async function chat(req, res, next) {
   try {
@@ -27,25 +29,35 @@ async function chat(req, res, next) {
       return res.status(400).json({ error: 'messages is required' });
     }
 
-    const response = await fetch(OPENROUTER_URL, {
+    // The client still sends OpenRouter-style "google/gemini-2.5-flash" —
+    // Gemini's own API wants just the bare model id.
+    const modelId = (model || DEFAULT_MODEL).replace(/^google\//, '');
+    const { systemInstruction, contents } = toGeminiPayload(messages);
+    const geminiTools = toGeminiTools(tools);
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent`;
+    const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${API_KEY}`,
-        'HTTP-Referer': 'https://hisabi.app',
-        'X-Title': 'Hisabi App',
+        'x-goog-api-key': API_KEY,
       },
       body: JSON.stringify({
-        model: model || DEFAULT_MODEL,
-        messages,
-        tools,
-        temperature: temperature ?? 0.7,
-        max_tokens: max_tokens ?? 2048,
+        ...(systemInstruction && { systemInstruction }),
+        contents,
+        ...(geminiTools && { tools: geminiTools }),
+        generationConfig: {
+          temperature: temperature ?? 0.7,
+          maxOutputTokens: max_tokens ?? 2048,
+        },
       }),
     });
 
     const data = await response.json();
-    return res.status(response.status).json(data);
+    if (!response.ok) {
+      return res.status(response.status).json(data);
+    }
+    return res.status(200).json(fromGeminiResponse(data));
   } catch (err) {
     next(err);
   }
