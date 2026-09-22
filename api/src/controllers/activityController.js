@@ -25,9 +25,10 @@ async function getTodayProgress(req, res, next) {
       getAllStreaks(userId),
     ]);
 
-    // Check if today is a period day
+    // Check if today is a period day — gated on the feature being enabled,
+    // not on gender, same as everywhere else this is checked.
     let is_period = false;
-    if (req.user.gender === 'f') {
+    if (req.user.settings?.female_settings?.period_tracking === true) {
       const periodRecord = await PeriodTracking.findOne({
         user_id: userId,
         start_date: { $lte: date },

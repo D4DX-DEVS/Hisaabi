@@ -8,11 +8,13 @@ const {
   GoodDeedLog,
   WorshipGoal,
   Muhasabah,
+  QuranMemorization,
 } = require('../models');
-const { computeMetrics, getExemptDays, FARDH_PRAYERS } = require('../services/worshipMetrics');
+const { computeMetrics, getExemptPrayers, isPrayerExempt, FARDH_PRAYERS } = require('../services/worshipMetrics');
 const { goalWithProgress } = require('./worshipGoalController');
 const { weekBounds } = require('./muhasabahController');
 const { getCurrentDate, getDaysBetweenDates, getMonthDateRange } = require('../utils/dateUtils');
+const { SURAH_PAGES, countCompletedSurahs } = require('../data/quranSurahPages');
 
 /**
  * Weights for the single "overall progress" number on the Today screen.
@@ -57,7 +59,9 @@ async function getDashboard(req, res, next) {
       duaRecord,
       deedRecords,
       goals,
-      exemptDays,
+      exemptByDay,
+      allQuranRecords,
+      quranMemorization,
     ] = await Promise.all([
       PrayerTracking.findOne({ user_id: userId, date }),
       QuranReading.findOne({ user_id: userId, date }),
@@ -67,38 +71,67 @@ async function getDashboard(req, res, next) {
       DuaTracking.findOne({ user_id: userId, date }),
       GoodDeedLog.find({ user_id: userId, date }),
       WorshipGoal.find({ user_id: userId, active: true }),
-      getExemptDays(userId, date, date),
+      getExemptPrayers(userId, date, date),
+      // Lifetime, not scoped to `date` — "surahs completed" is a standing
+      // accomplishment, not a daily figure.
+      QuranReading.find({ user_id: userId }).select('pages_read'),
+      QuranMemorization.findOne({ user_id: userId }),
     ]);
 
-    const isExempt = exemptDays.has(date);
+    const isExempt = exemptByDay.has(date);
 
     // ── Prayers ──
     const fp = (prayerRecord && prayerRecord.fardh_prayers) || {};
+    // Exemption is per prayer: on the day a cycle began or ended, only the
+    // prayers that fell inside the window are exempt. Each row carries its own
+    // flag so the app never has to guess.
     const prayers = FARDH_PRAYERS.map((name) => ({
       name,
       completed: fp[name] === true,
       // j = jamaah, ot = on time, l = late, q = qada (made up later)
       mode: fp[`${name}_m`] || null,
+      exempt: isPrayerExempt(exemptByDay, date, name),
     }));
     const completedPrayers = prayers.filter((p) => p.completed).length;
+    // Expected today = every prayer that is not exempt, plus any exempt one
+    // she chose to offer anyway.
+    const expectedPrayers = prayers.filter((p) => !p.exempt || p.completed).length;
     const prayerSection = {
       exempt: isExempt,
       prayers,
       completed: completedPrayers,
-      // On an exempt day only prayers she chose to offer are counted at all.
-      total: isExempt ? completedPrayers : FARDH_PRAYERS.length,
+      total: expectedPrayers,
       qada: prayers.filter((p) => p.mode === 'q').length,
       sunnah: (prayerRecord && prayerRecord.sunnah_prayers) || {},
     };
 
     // ── Qur'an ──
     const pagesRead = (quranRecord && quranRecord.pages_read) || [];
+    const allReadPages = new Set();
+    for (const r of allQuranRecords) {
+      for (const p of r.pages_read || []) allReadPages.add(p);
+    }
     const quranSection = {
       pages_read: pagesRead.length,
       pages: pagesRead,
       last_read_page: (quranRecord && quranRecord.last_read_page) || null,
       duration_minutes: (quranRecord && quranRecord.duration_minutes) || 0,
       goal: goalSettings.quran_pages || null,
+      surahs_completed: countCompletedSurahs(allReadPages),
+      surahs_total: SURAH_PAGES.length,
+    };
+
+    // ── Ayah memorization ── (mirrors goalsController.computeGoalProgress's
+    // quran_ayahs block exactly, so the two never disagree on the same day)
+    const ayahsMemorizedToday = quranMemorization
+      ? quranMemorization.memorized_ayahs.filter((a) => {
+          const d = new Date(a.memorized_at);
+          return d.toISOString().split('T')[0] === date;
+        }).length
+      : 0;
+    const ayahMemorizationSection = {
+      memorized_today: ayahsMemorizedToday,
+      goal: goalSettings.quran_ayahs || null,
     };
 
     // ── Dhikr ──
@@ -192,6 +225,7 @@ async function getDashboard(req, res, next) {
       is_exempt: isExempt,
       prayers: prayerSection,
       quran: quranSection,
+      ayah_memorization: ayahMemorizationSection,
       dhikr: dhikrSection,
       adhkar: adhkarSection,
       dua: duaSection,
@@ -232,7 +266,7 @@ async function getProgress(req, res, next) {
     const effectiveEnd = endDate > today ? today : endDate;
     const days = effectiveEnd >= startDate ? getDaysBetweenDates(startDate, effectiveEnd) : [];
 
-    const [totals, exemptDays, prayerRecords, quranRecords, deedRecords, adhkarRecords, fastingRecords] =
+    const [totals, exemptByDay, prayerRecords, quranRecords, deedRecords, adhkarRecords, fastingRecords] =
       await Promise.all([
         computeMetrics(
           userId,
@@ -254,7 +288,7 @@ async function getProgress(req, res, next) {
           startDate,
           effectiveEnd < startDate ? startDate : effectiveEnd
         ),
-        getExemptDays(userId, startDate, effectiveEnd < startDate ? startDate : effectiveEnd),
+        getExemptPrayers(userId, startDate, effectiveEnd < startDate ? startDate : effectiveEnd),
         PrayerTracking.find({ user_id: userId, date: { $gte: startDate, $lte: endDate } }),
         QuranReading.find({ user_id: userId, date: { $gte: startDate, $lte: endDate } }),
         GoodDeedLog.find({ user_id: userId, date: { $gte: startDate, $lte: endDate } }),
@@ -275,13 +309,13 @@ async function getProgress(req, res, next) {
     let prayerCompleted = 0;
     let prayerExpected = 0;
     const series = days.map((day) => {
-      const dayExempt = exemptDays.has(day);
+      const dayExempt = exemptByDay.has(day);
       const fp = (prayerByDate[day] && prayerByDate[day].fardh_prayers) || {};
       let done = 0;
       let expected = 0;
       for (const p of FARDH_PRAYERS) {
         const completed = fp[p] === true;
-        if (dayExempt && !completed) continue;
+        if (isPrayerExempt(exemptByDay, day, p) && !completed) continue;
         expected++;
         if (completed) done++;
       }
@@ -307,7 +341,7 @@ async function getProgress(req, res, next) {
       start_date: startDate,
       end_date: endDate,
       days_counted: days.length,
-      exempt_days: exemptDays.size,
+      exempt_days: exemptByDay.size,
       prayer: {
         completed: prayerCompleted,
         expected: prayerExpected,
@@ -335,7 +369,7 @@ async function getHistory(req, res, next) {
       start.getDate()
     ).padStart(2, '0')}`;
 
-    const [prayerRecords, quranRecords, deedRecords, fastingRecords, adhkarRecords, reflections, exemptDays] =
+    const [prayerRecords, quranRecords, deedRecords, fastingRecords, adhkarRecords, reflections, exemptByDay] =
       await Promise.all([
         PrayerTracking.find({ user_id: userId, date: { $gte: startDate, $lte: endDate } }),
         QuranReading.find({ user_id: userId, date: { $gte: startDate, $lte: endDate } }),
@@ -343,7 +377,7 @@ async function getHistory(req, res, next) {
         FastingDay.find({ user_id: userId, date: { $gte: startDate, $lte: endDate } }),
         AdhkarTracking.find({ user_id: userId, date: { $gte: startDate, $lte: endDate } }),
         Muhasabah.find({ user_id: userId, week_start: { $gte: startDate, $lte: endDate } }),
-        getExemptDays(userId, startDate, endDate),
+        getExemptPrayers(userId, startDate, endDate),
       ]);
 
     const index = {};
@@ -351,7 +385,7 @@ async function getHistory(req, res, next) {
       if (!index[d]) {
         index[d] = {
           date: d,
-          exempt: exemptDays.has(d),
+          exempt: exemptByDay.has(d),
           prayers_completed: 0,
           quran_pages: 0,
           quran_minutes: 0,

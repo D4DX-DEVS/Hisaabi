@@ -1,5 +1,6 @@
 const { AdhkarTracking, DuaTracking, ActivityLog } = require('../models');
 const { getCurrentDate } = require('../utils/dateUtils');
+const { queueStreakUpdate } = require('../services/streakQueueService');
 
 function serializeAdhkar(r, date) {
   if (!r) return { date, morning: false, evening: false, personal: [] };
@@ -59,6 +60,9 @@ async function updateAdhkar(req, res, next) {
       activity_type: 'adhkar',
       details: update,
     }).catch(() => {});
+
+    if ('morning' in update) queueStreakUpdate(userId, 'morning_adhkar');
+    if ('evening' in update) queueStreakUpdate(userId, 'evening_adhkar');
 
     return res.status(200).json({ success: true, ...serializeAdhkar(record, targetDate) });
   } catch (err) {

@@ -1,7 +1,37 @@
 const { Group, GroupChallenge, GroupGoal, GroupFeedEvent, User } = require('../models');
 const { computeMetric } = require('../services/worshipMetrics');
-const { appearsInFeed } = require('../services/groupPrivacy');
+const { appearsInFeed, groupPrefs } = require('../services/groupPrivacy');
+const { sendToUser } = require('../services/oneSignal');
 const { METRICS } = require('../models/WorshipGoal');
+
+/**
+ * Push a notification to one member of a group, honouring their mute
+ * setting for that specific group. Never throws — a failed or skipped
+ * send must not break whatever action triggered it (a reaction, a
+ * completed goal, a reminder).
+ *
+ * The "Group reminders" on/off toggle and the "important only" frequency
+ * option only apply to admin-sent group_reminder pushes — a reaction or a
+ * challenge/goal completion is personal to the recipient and isn't what
+ * either of those settings describe muting. 'daily_digest' has no batching
+ * mechanism to hold a reminder for yet, so it's delivered immediately
+ * rather than silently dropped — the user would otherwise never see it.
+ */
+async function notifyGroupMember(userId, groupId, message) {
+  try {
+    const recipient = await User.findById(userId);
+    if (!recipient) return;
+    const prefs = groupPrefs(recipient, groupId);
+    if (prefs.muted) return;
+    if (message.data?.type === 'group_reminder') {
+      if (!prefs.reminders) return;
+      if (prefs.frequency === 'important_only') return;
+    }
+    await sendToUser(userId, message);
+  } catch (err) {
+    // Intentionally swallowed — see above.
+  }
+}
 
 function isGroupAdmin(group, userId) {
   const uid = userId.toString();
@@ -62,28 +92,31 @@ async function participantProgress(challenge, participant) {
 /**
  * Serialize a challenge for the client.
  *
- * Member names are included only so participants can be listed; progress is
- * a single number per person and there is deliberately no ordering, ranking
- * or "top performer" field — the FR forbids competitive framing.
+ * Individual progress numbers never leave this function except as the
+ * caller's own (my_progress/my_percent) and the group-wide aggregate
+ * (group_percent) — the FR forbids competitive framing, and a per-person
+ * breakdown in the response would let any client build its own leaderboard
+ * even though nothing in the app renders one today. `participants` only
+ * says who is taking part, the same membership info the group's Members
+ * tab already shows everyone.
  */
 async function serializeChallenge(challenge, userMap, currentUserId) {
-  const participants = await Promise.all(
+  const withProgress = await Promise.all(
     (challenge.participants || []).map(async (p) => {
       const progress = await participantProgress(challenge, p);
-      const u = userMap[p.user_id.toString()];
-      return {
-        user_id: p.user_id,
-        name: u ? u.name : null,
-        progress,
-        percent: challenge.target ? Math.min(100, Math.round((progress / challenge.target) * 100)) : 0,
-        completed: progress >= challenge.target,
-        joined_at: p.joined_at,
-      };
+      const percent = challenge.target ? Math.min(100, Math.round((progress / challenge.target) * 100)) : 0;
+      return { user_id: p.user_id, joined_at: p.joined_at, progress, percent, completed: progress >= challenge.target };
     })
   );
 
-  const completedCount = participants.filter((p) => p.completed).length;
-  const me = participants.find((p) => p.user_id.toString() === currentUserId.toString());
+  const completedCount = withProgress.filter((p) => p.completed).length;
+  const me = withProgress.find((p) => p.user_id.toString() === currentUserId.toString());
+
+  const participants = withProgress.map((p) => ({
+    user_id: p.user_id,
+    name: userMap[p.user_id.toString()]?.name || null,
+    joined_at: p.joined_at,
+  }));
 
   return {
     id: challenge._id,
@@ -99,9 +132,9 @@ async function serializeChallenge(challenge, userMap, currentUserId) {
     participant_count: participants.length,
     completed_count: completedCount,
     // Group-level completion share — the collective picture, not a ranking.
-    group_percent: participants.length
+    group_percent: withProgress.length
       ? Math.round(
-          participants.reduce((s, p) => s + p.percent, 0) / participants.length
+          withProgress.reduce((s, p) => s + p.percent, 0) / withProgress.length
         )
       : 0,
     joined: !!me,
@@ -292,6 +325,14 @@ async function reportChallengeProgress(req, res, next) {
 
     if (justCompleted) {
       await emitFeedEvent(group._id, req.user, 'challenge_completed', { title: challenge.name });
+      notifyGroupMember(req.user._id, group._id, {
+        title: group.name,
+        body: `You completed "${challenge.name}" 🎉`,
+        // 'challenge_completion' matches the app's own per-type mute toggle
+        // (TrackerReminderType.challengeCompletion) — anything else falls
+        // through to "always allowed" there and ignores that setting.
+        data: { type: 'challenge_completion', group_id: group.group_id, challenge_id: challenge._id.toString() },
+      });
     }
 
     return res.status(200).json({
@@ -430,6 +471,15 @@ async function contributeToGroupGoal(req, res, next) {
     const after = Object.values(contributions).reduce((s, v) => s + (Number(v) || 0), 0);
     if (before < goal.target && after >= goal.target) {
       await emitFeedEvent(group._id, req.user, 'group_goal_reached', { title: goal.title });
+      // A group goal is reached together — everyone in the group hears
+      // about it, not just whoever's contribution tipped it over.
+      for (const memberId of group.users) {
+        notifyGroupMember(memberId, group._id, {
+          title: group.name,
+          body: `The group reached "${goal.title}" together 🎉`,
+          data: { type: 'group_goal_reached', group_id: group.group_id, goal_id: goal._id.toString() },
+        });
+      }
     }
 
     const memberIds = group.users.map((u) => u.toString());
@@ -495,6 +545,7 @@ module.exports = {
   isGroupAdmin,
   requireMembership,
   emitFeedEvent,
+  notifyGroupMember,
   listChallenges,
   createChallenge,
   updateChallenge,

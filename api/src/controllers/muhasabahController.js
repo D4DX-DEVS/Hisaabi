@@ -1,7 +1,8 @@
-const { Muhasabah } = require('../models');
-const { computeMetrics, getExemptDays, FARDH_PRAYERS } = require('../services/worshipMetrics');
+const { Muhasabah, WorshipGoal } = require('../models');
+const { computeMetrics, getExemptPrayers, isPrayerExempt, FARDH_PRAYERS } = require('../services/worshipMetrics');
 const { PrayerTracking } = require('../models');
 const { getCurrentDate, getDaysBetweenDates } = require('../utils/dateUtils');
+const { goalWithProgress } = require('./worshipGoalController');
 
 /**
  * Monday-start week containing `dateStr`, as { week_start, week_end }.
@@ -33,7 +34,7 @@ async function buildWeeklySummary(userId, weekStart, weekEnd) {
   }
 
   const days = getDaysBetweenDates(weekStart, effectiveEnd);
-  const [metrics, exemptDays, prayerRecords] = await Promise.all([
+  const [metrics, exemptByDay, prayerRecords, goals] = await Promise.all([
     computeMetrics(
       userId,
       [
@@ -53,8 +54,9 @@ async function buildWeeklySummary(userId, weekStart, weekEnd) {
       weekStart,
       effectiveEnd
     ),
-    getExemptDays(userId, weekStart, effectiveEnd),
+    getExemptPrayers(userId, weekStart, effectiveEnd),
     PrayerTracking.find({ user_id: userId, date: { $gte: weekStart, $lte: effectiveEnd } }),
+    WorshipGoal.find({ user_id: userId, active: true }),
   ]);
 
   const byDate = {};
@@ -63,15 +65,22 @@ async function buildWeeklySummary(userId, weekStart, weekEnd) {
   let completed = 0;
   let expected = 0;
   for (const day of days) {
-    const isExempt = exemptDays.has(day);
     const fp = (byDate[day] && byDate[day].fardh_prayers) || {};
     for (const p of FARDH_PRAYERS) {
       const done = fp[p] === true;
-      if (isExempt && !done) continue;
+      if (isPrayerExempt(exemptByDay, day, p) && !done) continue;
       expected++;
       if (done) completed++;
     }
   }
+
+  // Each goal is judged against its own period (daily/weekly/monthly), as of
+  // the last day of this Muhasabah week — the same rule the Goals tab uses,
+  // so "goals completed" here always agrees with what that tab shows.
+  const goalsWithProgress = await Promise.all(
+    goals.map((g) => goalWithProgress(g, effectiveEnd))
+  );
+  const goalsCompleted = goalsWithProgress.filter((g) => g.completed).length;
 
   return {
     days_elapsed: days.length,
@@ -79,8 +88,14 @@ async function buildWeeklySummary(userId, weekStart, weekEnd) {
       completed,
       expected,
       percent: expected ? Math.round((completed / expected) * 100) : 0,
-      exempt_days: exemptDays.size,
+      exempt_days: exemptByDay.size,
     },
+    goals_completed: goalsCompleted,
+    goals_total: goalsWithProgress.length,
+    // Missed activities: fardh prayers that were due and not offered — the
+    // one universal "did I skip something" figure every user has, rather
+    // than picking one arbitrary optional category to single out.
+    missed_activities: Math.max(0, expected - completed),
     ...metrics,
   };
 }

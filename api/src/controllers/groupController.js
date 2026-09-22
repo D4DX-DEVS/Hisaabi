@@ -180,6 +180,44 @@ async function getGroupMembers(req, res, next) {
   }
 }
 
+async function updateGroup(req, res, next) {
+  try {
+    const userId = req.user._id;
+    const { group_id } = req.params;
+    const { name, description, type } = req.body;
+
+    const group = await Group.findOne({ group_id });
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+
+    if (!isGroupAdmin(group, userId)) {
+      return res.status(403).json({ error: 'Only a group admin can edit this group' });
+    }
+
+    if (name !== undefined) {
+      const trimmed = String(name).trim();
+      if (!trimmed) return res.status(400).json({ error: 'name cannot be empty' });
+      group.name = trimmed;
+    }
+    if (description !== undefined) group.description = String(description).trim();
+    if (type !== undefined) {
+      const allowed = ['family', 'friends', 'study_circle', 'masjid', 'ramadan', 'community', 'custom'];
+      if (!allowed.includes(type)) return res.status(400).json({ error: `type must be one of: ${allowed.join(', ')}` });
+      group.type = type;
+    }
+
+    await group.save();
+    return res.status(200).json({
+      id: group._id,
+      group_id: group.group_id,
+      name: group.name,
+      description: group.description,
+      type: group.type,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function deleteGroup(req, res, next) {
   try {
     const userId = req.user._id;
@@ -300,4 +338,4 @@ async function revokeAdmin(req, res, next) {
   }
 }
 
-module.exports = { createGroup, joinGroupByCode, getMyGroups, leaveGroup, getGroupMembers, deleteGroup, transferAdmin, removeMember, revokeAdmin };
+module.exports = { createGroup, joinGroupByCode, getMyGroups, leaveGroup, getGroupMembers, updateGroup, deleteGroup, transferAdmin, removeMember, revokeAdmin };

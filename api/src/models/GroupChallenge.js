@@ -34,6 +34,10 @@ const groupChallengeSchema = new mongoose.Schema(
     icon: { type: String, default: null },
     participants: { type: [participantSchema], default: [] },
     archived: { type: Boolean, default: false },
+    // Members already pushed an "ending soon" notice for this challenge —
+    // whether joined or not, each member gets exactly one, ever. See
+    // challengeReminderScheduler.js.
+    ending_soon_notified: { type: [mongoose.Schema.Types.ObjectId], default: [] },
   },
   {
     timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },
