@@ -18,6 +18,13 @@ const SHAREABLE = ['overall', 'prayers', 'quran', 'dhikr', 'adhkar', 'fasting', 
 /**
  * Never shared with a group under any setting. Listed explicitly so the rule
  * is enforced in code rather than remembered by convention.
+ *
+ * 'individual_daily_stats' has exactly one narrow, explicit exception: a
+ * family-type group's day-by-day prayer log, visible only to that group's
+ * owner/co-admins, and only for a member who opted in via family_share
+ * below — a separate store from `share`, so it can never be turned on
+ * by accident through the regular (aggregate-only) sharing toggles, and
+ * never applies outside a family-type group.
  */
 const NEVER_SHARED = [
   'missed_prayers',
@@ -28,11 +35,17 @@ const NEVER_SHARED = [
   'muhasabah_reflections',
 ];
 
+// Detail categories a member may share with a family-type group's
+// owner/co-admins — day-by-day, not an aggregate. Deliberately separate
+// from SHAREABLE/`share` above.
+const FAMILY_SHAREABLE = ['prayers'];
+
 function privacySettings(user) {
   const p = (user.settings && user.settings.privacy) || {};
   return {
     appear_in_feed: p.appear_in_feed !== false, // opt-out, not opt-in
     share: p.share && typeof p.share === 'object' ? p.share : {},
+    family_share: p.family_share && typeof p.family_share === 'object' ? p.family_share : {},
   };
 }
 
@@ -49,6 +62,47 @@ function sharesCategory(user, groupId, category) {
 
 function appearsInFeed(user) {
   return privacySettings(user).appear_in_feed;
+}
+
+/**
+ * Does this user share day-by-day `category` detail with this family group's
+ * owner/co-admins? Defaults to false. The caller is responsible for checking
+ * the group is actually type 'family' — this function doesn't have the group
+ * document to check itself.
+ */
+function sharesFamilyDetail(user, groupId, category) {
+  if (!FAMILY_SHAREABLE.includes(category)) return false;
+  const p = (user.settings && user.settings.privacy) || {};
+  const familyShare = p.family_share && typeof p.family_share === 'object' ? p.family_share : {};
+  const forGroup = familyShare[String(groupId)];
+  if (!forGroup || typeof forGroup !== 'object') return false;
+  return forGroup[category] === true;
+}
+
+/**
+ * Merge a partial family-detail-sharing update into a user's settings.
+ * Mirrors updateSharing but writes to the separate family_share store.
+ */
+async function updateFamilyDetailSharing(user, groupId, updates) {
+  const settings = user.settings ? JSON.parse(JSON.stringify(user.settings)) : {};
+  const privacy = settings.privacy && typeof settings.privacy === 'object' ? settings.privacy : {};
+  const familyShare = privacy.family_share && typeof privacy.family_share === 'object' ? privacy.family_share : {};
+  const forGroup = familyShare[String(groupId)] && typeof familyShare[String(groupId)] === 'object'
+    ? familyShare[String(groupId)]
+    : {};
+
+  for (const [key, value] of Object.entries(updates || {})) {
+    if (!FAMILY_SHAREABLE.includes(key)) continue;
+    forGroup[key] = value === true || value === 'true';
+  }
+
+  familyShare[String(groupId)] = forGroup;
+  privacy.family_share = familyShare;
+  settings.privacy = privacy;
+  user.settings = settings;
+  user.markModified('settings');
+  await user.save();
+  return forGroup;
 }
 
 /**
@@ -129,6 +183,7 @@ async function updateGroupPrefs(user, groupId, updates) {
 module.exports = {
   SHAREABLE,
   NEVER_SHARED,
+  FAMILY_SHAREABLE,
   privacySettings,
   sharesCategory,
   appearsInFeed,
@@ -136,4 +191,6 @@ module.exports = {
   setAppearInFeed,
   groupPrefs,
   updateGroupPrefs,
+  sharesFamilyDetail,
+  updateFamilyDetailSharing,
 };

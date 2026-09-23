@@ -25,6 +25,7 @@ const {
   deleteReminder,
   getMySettings,
   updateMySettings,
+  getFamilyPrayerLog,
 } = require('../controllers/groupSpaceController');
 
 router.use(authenticate);
@@ -61,5 +62,9 @@ router.delete('/:group_id/reminders/:id', deleteReminder);
 // Per-member privacy + notification preferences
 router.get('/:group_id/my-settings', getMySettings);
 router.put('/:group_id/my-settings', updateMySettings);
+
+// Family-type groups only: owner/co-admins see opted-in members' day-by-day
+// prayer log.
+router.get('/:group_id/family/prayers', getFamilyPrayerLog);
 
 module.exports = router;

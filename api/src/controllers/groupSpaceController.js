@@ -4,9 +4,12 @@ const { computeMetrics, getExemptPrayers, isPrayerExempt, FARDH_PRAYERS } = requ
 const { PrayerTracking } = require('../models');
 const {
   SHAREABLE,
+  FAMILY_SHAREABLE,
   sharesCategory,
+  sharesFamilyDetail,
   privacySettings,
   updateSharing,
+  updateFamilyDetailSharing,
   setAppearInFeed,
   groupPrefs,
   updateGroupPrefs,
@@ -358,6 +361,11 @@ async function getMySettings(req, res, next) {
       share: privacy.share[group._id.toString()] || {},
       appear_in_feed: privacy.appear_in_feed,
       prefs: groupPrefs(req.user, group._id),
+      // Only meaningful for a family-type group, but harmless to return
+      // otherwise — the frontend only shows this section when group.type
+      // is 'family'.
+      family_shareable: FAMILY_SHAREABLE,
+      family_share: privacy.family_share[group._id.toString()] || {},
     });
   } catch (err) {
     next(err);
@@ -369,7 +377,7 @@ async function updateMySettings(req, res, next) {
     const group = await requireMembership(req, res);
     if (!group) return;
 
-    const { share, appear_in_feed, muted, reminders, frequency } = req.body;
+    const { share, appear_in_feed, muted, reminders, frequency, family_share } = req.body;
 
     let updatedShare = privacySettings(req.user).share[group._id.toString()] || {};
     if (share && typeof share === 'object') {
@@ -377,6 +385,11 @@ async function updateMySettings(req, res, next) {
     }
     if (appear_in_feed !== undefined) {
       await setAppearInFeed(req.user, appear_in_feed);
+    }
+
+    let updatedFamilyShare = privacySettings(req.user).family_share[group._id.toString()] || {};
+    if (family_share && typeof family_share === 'object' && group.type === 'family') {
+      updatedFamilyShare = await updateFamilyDetailSharing(req.user, group._id, family_share);
     }
 
     let prefs = groupPrefs(req.user, group._id);
@@ -388,7 +401,59 @@ async function updateMySettings(req, res, next) {
       success: true,
       share: updatedShare,
       appear_in_feed: privacySettings(req.user).appear_in_feed,
+      family_share: updatedFamilyShare,
       prefs,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * A family-type group's owner/co-admins see each opted-in member's actual
+ * day-by-day prayer log — the one explicit, narrow exception to this
+ * codebase's "aggregate only, never per-day detail" group-sharing rule (see
+ * groupPrivacy.js's NEVER_SHARED comment). Gated three ways: the group must
+ * be type 'family', the caller must be an admin of it, and each member's own
+ * family_share.prayers toggle must be on — a member who never opted in is
+ * silently omitted, not shown as declined.
+ */
+async function getFamilyPrayerLog(req, res, next) {
+  try {
+    const group = await requireMembership(req, res, { adminOnly: true });
+    if (!group) return;
+
+    if (group.type !== 'family') {
+      return res.status(403).json({ error: 'This view is only available for family-type groups.' });
+    }
+
+    const today = getCurrentDate();
+    const { week_start, week_end } = weekBounds(req.query.date || today);
+    const endDate = week_end > today ? today : week_end;
+    const startDate = req.query.start_date || week_start;
+    const finalEndDate = req.query.end_date || endDate;
+
+    const members = await User.find({ _id: { $in: group.users } }).select('name settings');
+    const opted = members.filter((m) => sharesFamilyDetail(m, group._id, 'prayers'));
+
+    const records = await PrayerTracking.find({
+      user_id: { $in: opted.map((m) => m._id) },
+      date: { $gte: startDate, $lte: finalEndDate },
+    });
+    const byUser = {};
+    for (const r of records) {
+      const uid = r.user_id.toString();
+      (byUser[uid] = byUser[uid] || []).push({ date: r.date, fardh_prayers: r.fardh_prayers });
+    }
+
+    return res.status(200).json({
+      start_date: startDate,
+      end_date: finalEndDate,
+      members: opted.map((m) => ({
+        user_id: m._id,
+        name: m.name,
+        days: (byUser[m._id.toString()] || []).sort((a, b) => (a.date < b.date ? -1 : 1)),
+      })),
     });
   } catch (err) {
     next(err);
@@ -405,5 +470,6 @@ module.exports = {
   deleteReminder,
   getMySettings,
   updateMySettings,
+  getFamilyPrayerLog,
   emitFeedEvent,
 };
