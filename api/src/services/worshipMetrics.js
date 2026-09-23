@@ -214,7 +214,15 @@ async function countDuaCompletions(userId, startDate, endDate) {
 
 async function countGoodDeeds(userId, startDate, endDate, category) {
   const query = { user_id: userId, date: { $gte: startDate, $lte: endDate } };
-  if (category) query.category = category;
+  // Islamic-learning entries live in the same GoodDeedLog collection but are
+  // shown as their own category everywhere (trackerController's dashboard
+  // goodDeedsSection excludes them too) — the generic "good deeds" metric
+  // means everything else, not a request for every category to double as one.
+  if (category) {
+    query.category = category;
+  } else {
+    query.category = { $ne: 'learning' };
+  }
   const records = await GoodDeedLog.find(query);
   return records.reduce((sum, r) => sum + (r.count || 0), 0);
 }
