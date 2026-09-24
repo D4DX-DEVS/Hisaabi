@@ -11,19 +11,24 @@ const { METRICS } = require('../models/WorshipGoal');
  * completed goal, a reminder).
  *
  * The "Group reminders" on/off toggle and the "important only" frequency
- * option only apply to admin-sent group_reminder pushes — a reaction or a
- * challenge/goal completion is personal to the recipient and isn't what
- * either of those settings describe muting. 'daily_digest' has no batching
- * mechanism to hold a reminder for yet, so it's delivered immediately
- * rather than silently dropped — the user would otherwise never see it.
+ * option apply to admin-sent group_reminder pushes and to the automatic
+ * challenge_ending_soon / challenge_not_joined nudges from
+ * challengeReminderScheduler.js — both are nudges about something the user
+ * hasn't done yet. A reaction or a challenge/goal completion is personal to
+ * the recipient and isn't what either of those settings describe muting.
+ * 'daily_digest' has no batching mechanism to hold a reminder for yet, so
+ * it's delivered immediately rather than silently dropped — the user would
+ * otherwise never see it.
  */
+const REMINDER_TYPES = new Set(['group_reminder', 'challenge_ending_soon', 'challenge_not_joined']);
+
 async function notifyGroupMember(userId, groupId, message) {
   try {
     const recipient = await User.findById(userId);
     if (!recipient) return;
     const prefs = groupPrefs(recipient, groupId);
     if (prefs.muted) return;
-    if (message.data?.type === 'group_reminder') {
+    if (REMINDER_TYPES.has(message.data?.type)) {
       if (!prefs.reminders) return;
       if (prefs.frequency === 'important_only') return;
     }

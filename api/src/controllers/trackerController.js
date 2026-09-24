@@ -300,8 +300,13 @@ async function getProgress(req, res, next) {
     for (const r of prayerRecords) prayerByDate[r.date] = r;
     const quranByDate = {};
     for (const r of quranRecords) quranByDate[r.date] = r;
+    // Excludes 'learning' category for the same reason as getHistory below —
+    // Islamic-study minutes aren't a "good deed" for this figure's purpose.
     const deedsByDate = {};
-    for (const r of deedRecords) deedsByDate[r.date] = (deedsByDate[r.date] || 0) + (r.count || 0);
+    for (const r of deedRecords) {
+      if (r.category === 'learning') continue;
+      deedsByDate[r.date] = (deedsByDate[r.date] || 0) + (r.count || 0);
+    }
     const adhkarByDate = {};
     for (const r of adhkarRecords) adhkarByDate[r.date] = (r.morning ? 1 : 0) + (r.evening ? 1 : 0);
     const fastingDates = new Set(fastingRecords.map((r) => r.date));
@@ -407,7 +412,14 @@ async function getHistory(req, res, next) {
       e.quran_pages = (r.pages_read || []).length;
       e.quran_minutes = r.duration_minutes || 0;
     }
-    for (const r of deedRecords) ensure(r.date).good_deeds += r.count || 0;
+    // Islamic-learning entries are logged through the same GoodDeedLog
+    // collection but shown as their own category everywhere else (the Today
+    // dashboard's goodDeedsSection excludes them too) — keep History's count
+    // consistent with that instead of conflating study minutes with deeds.
+    for (const r of deedRecords) {
+      if (r.category === 'learning') continue;
+      ensure(r.date).good_deeds += r.count || 0;
+    }
     for (const r of fastingRecords) ensure(r.date).fasted = r.status === 'completed';
     for (const r of adhkarRecords) {
       ensure(r.date).adhkar_sessions = (r.morning ? 1 : 0) + (r.evening ? 1 : 0);
