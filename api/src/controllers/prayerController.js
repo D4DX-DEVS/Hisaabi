@@ -165,13 +165,13 @@ async function getFardhPrayerAnalysis(req, res, next) {
         const wasCompleted = fp[p] === true;
         // Exemption is per prayer, not per day: on the day a cycle began or
         // ended, only the prayers that actually fell inside the window are
-        // excluded. The rest count normally, missed ones included.
-        if (isPrayerExempt(exemptByDay, day, p) && !wasCompleted) {
+        // excluded. A prayer mark inside that window is overridden too — a
+        // cycle logged several days late means those days were likely marked
+        // before she recorded it, and exemption wins over a stray mark.
+        if (isPrayerExempt(exemptByDay, day, p)) {
           prayerStats[p].exempt++;
           continue;
         }
-        // Either a normal eligible day, or a prayer already completed
-        // before the cycle started that same day — credit is preserved.
         prayerStats[p].total++;
         if (wasCompleted) {
           prayerStats[p].completed++;

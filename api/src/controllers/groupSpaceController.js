@@ -62,7 +62,7 @@ async function memberPrayerPercent(userId, startDate, endDate) {
     const fp = (byDate[day] && byDate[day].fardh_prayers) || {};
     for (const p of FARDH_PRAYERS) {
       const completed = fp[p] === true;
-      if (isPrayerExempt(exemptByDay, day, p) && !completed) continue;
+      if (isPrayerExempt(exemptByDay, day, p)) continue;
       expected++;
       if (completed) done++;
     }
