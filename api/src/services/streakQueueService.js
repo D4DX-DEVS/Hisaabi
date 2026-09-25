@@ -5,6 +5,7 @@ const {
   updateMorningAdhkarStreak,
   updateEveningAdhkarStreak,
   updateCombinedStreak,
+  updatePersonalGoalsStreak,
   updateAllStreaks,
 } = require('./streakService');
 
@@ -52,6 +53,9 @@ function queueStreakUpdate(userId, streakType) {
         case 'combined':
           await updateCombinedStreak(userId);
           break;
+        case 'personal_goals':
+          await updatePersonalGoalsStreak(userId);
+          break;
         case 'all':
           await updateAllStreaks(userId);
           break;
@@ -68,7 +72,7 @@ function queueStreakUpdate(userId, streakType) {
  * Queue updates for all streak types
  */
 function queueAllStreakUpdates(userId) {
-  ['prayer', 'quran_reading', 'dhikr', 'morning_adhkar', 'evening_adhkar', 'combined'].forEach(
+  ['prayer', 'quran_reading', 'dhikr', 'morning_adhkar', 'evening_adhkar', 'combined', 'personal_goals'].forEach(
     (type) => queueStreakUpdate(userId, type)
   );
 }

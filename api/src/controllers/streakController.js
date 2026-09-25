@@ -16,7 +16,7 @@ async function getAllStreaksController(req, res, next) {
     }
 
     // Ensure all types exist
-    for (const type of ['prayer', 'quran_reading', 'dhikr', 'morning_adhkar', 'evening_adhkar', 'combined']) {
+    for (const type of ['prayer', 'quran_reading', 'dhikr', 'morning_adhkar', 'evening_adhkar', 'combined', 'personal_goals']) {
       if (!result[type]) {
         result[type] = { current: 0, longest: 0, lastDate: null };
       }

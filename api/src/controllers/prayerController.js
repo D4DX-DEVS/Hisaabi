@@ -65,6 +65,7 @@ async function updateFardhPrayer(req, res, next) {
     // Queue streak updates
     queueStreakUpdate(userId, 'prayer');
     queueStreakUpdate(userId, 'combined');
+    queueStreakUpdate(userId, 'personal_goals');
 
     return res.status(200).json({
       success: true,
@@ -110,6 +111,7 @@ async function updateSunnahPrayer(req, res, next) {
 
     queueStreakUpdate(userId, 'prayer');
     queueStreakUpdate(userId, 'combined');
+    queueStreakUpdate(userId, 'personal_goals');
 
     return res.status(200).json({
       success: true,

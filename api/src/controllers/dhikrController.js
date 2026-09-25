@@ -60,6 +60,7 @@ async function updateDhikrCount(req, res, next) {
 
     queueStreakUpdate(userId, 'dhikr');
     queueStreakUpdate(userId, 'combined');
+    queueStreakUpdate(userId, 'personal_goals');
 
     const total_count = Object.values(record.dhikr_counts).reduce((s, v) => s + v, 0);
 

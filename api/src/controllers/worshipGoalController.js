@@ -1,6 +1,7 @@
 const { WorshipGoal } = require('../models');
 const { computeMetric } = require('../services/worshipMetrics');
 const { getCurrentDate, getMonthDateRange } = require('../utils/dateUtils');
+const { queueStreakUpdate } = require('../services/streakQueueService');
 
 const METRICS = require('../models/WorshipGoal').METRICS;
 
@@ -97,6 +98,7 @@ async function createGoal(req, res, next) {
       color: color || null,
     });
 
+    queueStreakUpdate(userId, 'personal_goals');
     return res.status(200).json({ success: true, goal: await goalWithProgress(goal, getCurrentDate()) });
   } catch (err) {
     next(err);
@@ -135,6 +137,7 @@ async function updateGoal(req, res, next) {
     if (active !== undefined) goal.active = active === true || active === 'true';
 
     await goal.save();
+    queueStreakUpdate(userId, 'personal_goals');
     return res.status(200).json({ success: true, goal: await goalWithProgress(goal, getCurrentDate()) });
   } catch (err) {
     next(err);
@@ -166,6 +169,7 @@ async function incrementGoal(req, res, next) {
     goal.manual_progress = progress;
     goal.markModified('manual_progress');
     await goal.save();
+    queueStreakUpdate(userId, 'personal_goals');
 
     return res.status(200).json({ success: true, goal: await goalWithProgress(goal, dateStr) });
   } catch (err) {
@@ -178,6 +182,7 @@ async function deleteGoal(req, res, next) {
     const userId = req.user._id;
     const result = await WorshipGoal.deleteOne({ _id: req.params.id, user_id: userId });
     if (result.deletedCount === 0) return res.status(404).json({ error: 'Goal not found' });
+    queueStreakUpdate(userId, 'personal_goals');
     return res.status(200).json({ success: true });
   } catch (err) {
     next(err);
