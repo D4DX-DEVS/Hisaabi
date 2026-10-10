@@ -30,7 +30,7 @@ async function login(req, res, next) {
       }
     }
 
-    const token = generateToken({ id: user._id, uid: user.uid });
+    const token = generateToken({ id: user._id, uid: user.uid, v: user.token_version || 0 });
 
     // Queue streak updates async
     queueAllStreakUpdates(user._id);
