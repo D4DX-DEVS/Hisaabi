@@ -377,6 +377,17 @@ async function exportGroupActivities(req, res, next) {
       });
     }
 
+    // Excel right-aligns numbers by default, which leaves the counts hanging
+    // off the right edge of their column away from the text beside them —
+    // left-align every cell so each column lines up neatly.
+    workbook.eachSheet((sheet) => {
+      sheet.eachRow((row) => {
+        row.eachCell({ includeEmpty: true }, (cell) => {
+          cell.alignment = { ...cell.alignment, horizontal: 'left' };
+        });
+      });
+    });
+
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${group.name}_activities_export.xlsx"`);
 
