@@ -27,6 +27,13 @@ async function authenticate(req, res, next) {
       return res.status(401).json({ error: 'User not found' });
     }
 
+    // A mismatch means this token was issued before the user's last
+    // revocation (e.g. a lost-phone token_version bump) — tokens are now
+    // long-lived, so this is the only way to kill an already-issued one.
+    if ((decoded.v || 0) !== (user.token_version || 0)) {
+      return res.status(401).json({ error: 'Token revoked' });
+    }
+
     req.user = user;
     next();
   } catch (err) {

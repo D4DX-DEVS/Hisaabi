@@ -1,5 +1,6 @@
-const { PrayerTracking, QuranReading, DhikrTracking, AdhkarTracking, PeriodTracking, Streak } = require('../models');
+const { PrayerTracking, QuranReading, DhikrTracking, AdhkarTracking, PeriodTracking, Streak, WorshipGoal } = require('../models');
 const { getCurrentDate, getDaysBetweenDates, formatDate } = require('../utils/dateUtils');
+const { computeMetric } = require('./worshipMetrics');
 
 /**
  * Calculate streak for a given activity type.
@@ -103,6 +104,84 @@ async function getMorningAdhkarActivityDates(userId) {
 async function getEveningAdhkarActivityDates(userId) {
   const records = await AdhkarTracking.find({ user_id: userId, evening: true });
   return records.map((r) => r.date);
+}
+
+/**
+ * Whether every one of the given goals was met on a specific day. Manual
+ * goals read straight from their own per-day ledger (`manual_progress` is
+ * additive, never overwritten, so it already holds real history); metric
+ * goals are recomputed for that single day exactly like goalWithProgress
+ * does for "today" — no separate completion ledger needed for those either.
+ */
+async function dailyGoalsMetOn(dateStr, goals) {
+  const results = await Promise.all(
+    goals.map(async (g) => {
+      if (g.metric === 'manual') {
+        return (Number((g.manual_progress || {})[dateStr]) || 0) >= g.target;
+      }
+      const current = await computeMetric(g.user_id, g.metric, dateStr, dateStr);
+      return current >= g.target;
+    })
+  );
+  return results.every(Boolean);
+}
+
+/**
+ * FR §21's "Personal goals" streak: consecutive days where every currently
+ * active daily-period goal was met (AND, not OR — a slip on any one goal
+ * breaks it, matching the other single-activity streaks' all-or-nothing
+ * feel). Weekly/monthly goals don't fit a daily streak and are excluded.
+ *
+ * Bounded to the most-recently-created active goal's date — the exact set
+ * of goals being judged didn't fully exist before that day, so nothing
+ * earlier can honestly count.
+ */
+async function calculatePersonalGoalsStreak(userId, isFemaleMaintainStreaks = false) {
+  const today = getCurrentDate();
+  const goals = await WorshipGoal.find({ user_id: userId, active: true, period: 'daily' });
+  if (goals.length === 0) return { streak: 0, lastActivityDate: null };
+
+  const windowStart = goals.reduce((latest, g) => {
+    const created = formatDate(g.created_at);
+    return created > latest ? created : latest;
+  }, '0000-00-00');
+
+  let periodDates = new Set();
+  if (isFemaleMaintainStreaks) {
+    const periods = await PeriodTracking.find({ user_id: userId });
+    for (const p of periods) {
+      getDaysBetweenDates(p.start_date, p.end_date).forEach((d) => periodDates.add(d));
+    }
+  }
+
+  const existing = await Streak.findOne({ user_id: userId, streak_type: 'personal_goals' });
+  const floorDate = existing && existing.streak_broken_date
+    ? formatDate(existing.streak_broken_date)
+    : null;
+
+  let current = new Date(today);
+  let streak = 0;
+  let lastActivityDate = null;
+
+  while (true) {
+    const dateStr = formatDate(current);
+    if (dateStr < windowStart) break;
+    if (floorDate && dateStr < floorDate) break;
+
+    const hasActivity = periodDates.has(dateStr) || (await dailyGoalsMetOn(dateStr, goals));
+    if (!hasActivity) {
+      if (dateStr === today) {
+        current.setDate(current.getDate() - 1);
+        continue;
+      }
+      break;
+    }
+    if (!lastActivityDate) lastActivityDate = new Date(current);
+    streak++;
+    current.setDate(current.getDate() - 1);
+  }
+
+  return { streak, lastActivityDate };
 }
 
 /**
@@ -270,18 +349,40 @@ async function updateCombinedStreak(userId) {
 }
 
 /**
+ * Update the FR §21 personal-goals streak
+ */
+async function updatePersonalGoalsStreak(userId) {
+  const user = await require('../models').User.findById(userId);
+  const isFemaleMaintain =
+    user && user.settings && user.settings.female_settings &&
+    user.settings.female_settings.maintain_streaks_during_period === true;
+
+  const { streak, lastActivityDate } = await calculatePersonalGoalsStreak(userId, isFemaleMaintain);
+  return await upsertStreak(userId, 'personal_goals', streak, lastActivityDate);
+}
+
+/**
  * Update all streaks for a user
  */
 async function updateAllStreaks(userId) {
-  const [prayer, quran, dhikr, morningAdhkar, eveningAdhkar, combined] = await Promise.all([
+  const [prayer, quran, dhikr, morningAdhkar, eveningAdhkar, combined, personalGoals] = await Promise.all([
     updatePrayerStreak(userId),
     updateQuranStreak(userId),
     updateDhikrStreak(userId),
     updateMorningAdhkarStreak(userId),
     updateEveningAdhkarStreak(userId),
     updateCombinedStreak(userId),
+    updatePersonalGoalsStreak(userId),
   ]);
-  return { prayer, quran, dhikr, morning_adhkar: morningAdhkar, evening_adhkar: eveningAdhkar, combined };
+  return {
+    prayer,
+    quran,
+    dhikr,
+    morning_adhkar: morningAdhkar,
+    evening_adhkar: eveningAdhkar,
+    combined,
+    personal_goals: personalGoals,
+  };
 }
 
 /**
@@ -307,6 +408,7 @@ module.exports = {
   updateMorningAdhkarStreak,
   updateEveningAdhkarStreak,
   updateCombinedStreak,
+  updatePersonalGoalsStreak,
   updateAllStreaks,
   getAllStreaks,
 };

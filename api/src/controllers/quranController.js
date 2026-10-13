@@ -106,6 +106,7 @@ async function addReadPage(req, res, next) {
 
     queueStreakUpdate(userId, 'quran_reading');
     queueStreakUpdate(userId, 'combined');
+    queueStreakUpdate(userId, 'personal_goals');
 
     return res.status(200).json({
       success: true,

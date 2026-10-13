@@ -7,6 +7,11 @@ const userSchema = new mongoose.Schema(
     name: { type: String, required: true },
     dob: { type: String, default: null },
     gender: { type: String, enum: ['m', 'f', null], default: null },
+    // Stamped into every JWT issued for this user and checked on every
+    // request (see auth.js). Bumping it instantly invalidates every token
+    // already issued — the one lever to kill a lost/stolen device's session
+    // now that tokens are long-lived instead of expiring every 30 days.
+    token_version: { type: Number, default: 0 },
     settings: {
       type: mongoose.Schema.Types.Mixed,
       default: () => ({

@@ -63,6 +63,7 @@ async function updateAdhkar(req, res, next) {
 
     if ('morning' in update) queueStreakUpdate(userId, 'morning_adhkar');
     if ('evening' in update) queueStreakUpdate(userId, 'evening_adhkar');
+    if ('morning' in update || 'evening' in update) queueStreakUpdate(userId, 'personal_goals');
 
     return res.status(200).json({ success: true, ...serializeAdhkar(record, targetDate) });
   } catch (err) {

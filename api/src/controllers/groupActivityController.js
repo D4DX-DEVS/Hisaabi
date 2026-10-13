@@ -1,4 +1,5 @@
-const { GroupActivity, Group, User } = require('../models');
+const { GroupActivity, GroupFeedEvent, Group, User } = require('../models');
+const { emitFeedEvent } = require('./groupChallengeController');
 const ExcelJS = require('exceljs');
 
 const VALID_ACTIVITY_TYPES = ['daily', 'weekly', 'monthly', 'recurring'];
@@ -123,6 +124,8 @@ async function updateMyActivityStatus(req, res, next) {
     const userStatuses = activity.user_status || [];
     const idx = userStatuses.findIndex((s) => s.user && s.user.toString() === userId.toString());
 
+    const wasCompleted = idx !== -1 && userStatuses[idx].status === 'completed';
+
     const updatedStatus = { user: userId, status, updatedAt: new Date().toISOString() };
     if (idx !== -1) {
       userStatuses[idx] = updatedStatus;
@@ -133,6 +136,29 @@ async function updateMyActivityStatus(req, res, next) {
     activity.user_status = userStatuses;
     activity.markModified('user_status');
     await activity.save();
+
+    // Share the completion to the group's feed ("Fathima completed
+    // "Morning Adhkar"."). Only on the move into completed, and once per
+    // member per activity per day so undo-then-redo doesn't repeat it.
+    // emitFeedEvent honours the member's "appear in feed" opt-out and never
+    // fails this request.
+    if (status === 'completed' && !wasCompleted) {
+      const startOfDay = new Date();
+      startOfDay.setHours(0, 0, 0, 0);
+      const alreadyShared = await GroupFeedEvent.exists({
+        group_id: group._id,
+        user_id: userId,
+        event_type: 'goal_completed',
+        'data.activity_id': activity._id.toString(),
+        created_at: { $gte: startOfDay },
+      });
+      if (!alreadyShared) {
+        await emitFeedEvent(group._id, req.user, 'goal_completed', {
+          title: activity.activity_name,
+          activity_id: activity._id.toString(),
+        });
+      }
+    }
 
     return res.status(200).json({
       id: activity._id,
@@ -376,6 +402,17 @@ async function exportGroupActivities(req, res, next) {
         completion_rate: rate,
       });
     }
+
+    // Excel right-aligns numbers by default, which leaves the counts hanging
+    // off the right edge of their column away from the text beside them —
+    // left-align every cell so each column lines up neatly.
+    workbook.eachSheet((sheet) => {
+      sheet.eachRow((row) => {
+        row.eachCell({ includeEmpty: true }, (cell) => {
+          cell.alignment = { ...cell.alignment, horizontal: 'left' };
+        });
+      });
+    });
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${group.name}_activities_export.xlsx"`);
