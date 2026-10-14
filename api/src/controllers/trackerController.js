@@ -116,6 +116,7 @@ async function getDashboard(req, res, next) {
       pages: pagesRead,
       last_read_page: (quranRecord && quranRecord.last_read_page) || null,
       duration_minutes: (quranRecord && quranRecord.duration_minutes) || 0,
+      listened: !!(quranRecord && quranRecord.listened),
       goal: goalSettings.quran_pages || null,
       surahs_completed: countCompletedSurahs(allReadPages),
       surahs_total: SURAH_PAGES.length,
