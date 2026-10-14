@@ -154,6 +154,46 @@ async function logReadingDuration(req, res, next) {
   }
 }
 
+/**
+ * Tick or untick "listened to the Qur'an" for a given day.
+ *
+ * Listening is not tracked by the app (it can happen anywhere), so this is a
+ * plain daily flag. Future days are rejected, like marking a prayer early.
+ */
+async function setListened(req, res, next) {
+  try {
+    const userId = req.user._id;
+    const { listened, date } = req.body;
+
+    if (typeof listened !== 'boolean') {
+      return res.status(400).json({ error: 'listened must be true or false' });
+    }
+
+    const today = getCurrentDate();
+    const targetDate = date || today;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) {
+      return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+    }
+    if (targetDate > today) {
+      return res.status(400).json({ error: 'Cannot mark listening for a future date' });
+    }
+
+    const record = await QuranReading.findOneAndUpdate(
+      { user_id: userId, date: targetDate },
+      { $set: { listened }, $setOnInsert: { pages_read: [] } },
+      { upsert: true, new: true }
+    );
+
+    return res.status(200).json({
+      success: true,
+      date: targetDate,
+      listened: record.listened,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function removeReadPage(req, res, next) {
   try {
     const userId = req.user._id;
@@ -397,6 +437,7 @@ async function resetMemorization(req, res, next) {
 
 module.exports = {
   logReadingDuration,
+  setListened,
   getReadingProgress,
   addReadPage,
   removeReadPage,

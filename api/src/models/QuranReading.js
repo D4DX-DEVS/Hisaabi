@@ -7,6 +7,9 @@ const quranReadingSchema = new mongoose.Schema(
     pages_read: { type: [Number], default: [] },
     last_read_page: { type: Number, default: null, min: 1, max: 604 },
     duration_minutes: { type: Number, default: 0, min: 0 },
+    // Ticked by the user for "I listened to the Qur'an today" — listening
+    // happens outside the app too, so it's a plain daily flag, not a duration.
+    listened: { type: Boolean, default: false },
   },
   {
     timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },
