@@ -6,8 +6,11 @@
  *
  *  - The model is chosen HERE. Whatever `model` a client sends is ignored —
  *    otherwise anyone with a login could point our key at an expensive model.
- *  - Thinking is off (it triples latency and output cost for no accuracy gain
- *    on this app's short tool-routing turns).
+ *  - Thinking is off by default (it triples latency and output cost for no
+ *    accuracy gain on this app's short tool-routing turns). The user can switch
+ *    it on in the chat (`deep_thinking: true`) for questions that need more care;
+ *    such a request is allowed more output and counts as 3 against the hourly
+ *    limit.
  *  - Requests only go to hosts that do not collect prompts (`data_collection:
  *    deny`), since chats can contain prayer and fasting habits.
  *  - Upstream failures are logged here and reported to the app as generic
@@ -19,6 +22,9 @@ const API_KEY = process.env.OPENROUTER_API_KEY;
 // Overridable by env for the server owner only — never by the client.
 const MODEL = process.env.AI_MODEL || 'qwen/qwen3.7-flash';
 const MAX_OUTPUT_TOKENS = 2048;
+// Thinking tokens come out of max_tokens too, so deep requests get more room.
+const MAX_OUTPUT_TOKENS_DEEP = 4096;
+const DEEP_THINKING_COST = 3;
 const TIMEOUT_MS = 60000;
 
 // Keep only the fields the OpenAI format defines. Older app sessions echo extra
@@ -46,7 +52,10 @@ async function chat(req, res, next) {
       return res.status(503).json({ error: 'The AI assistant is not configured on this server.' });
     }
 
-    const { allowed, retryAfterMs } = checkAndRecord(req.user._id);
+    // Only a literal `true` turns it on; anything else is the normal fast mode.
+    const deep = req.body?.deep_thinking === true;
+
+    const { allowed, retryAfterMs } = checkAndRecord(req.user._id, deep ? DEEP_THINKING_COST : 1);
     if (!allowed) {
       res.set('Retry-After', Math.ceil(retryAfterMs / 1000).toString());
       return res.status(429).json({ error: 'Too many AI assistant requests — please try again later.' });
@@ -61,8 +70,12 @@ async function chat(req, res, next) {
       model: MODEL,
       messages: cleanMessages(messages),
       temperature: Number.isFinite(temperature) ? Math.min(Math.max(temperature, 0), 1.5) : 0.7,
-      max_tokens: Math.min(Number.isFinite(max_tokens) && max_tokens > 0 ? max_tokens : MAX_OUTPUT_TOKENS, MAX_OUTPUT_TOKENS),
-      reasoning: { enabled: false },
+      // Deep mode gets a fixed, larger allowance (the app always asks for 2048,
+      // which would leave thinking no room); normal mode honours a smaller ask.
+      max_tokens: deep
+        ? MAX_OUTPUT_TOKENS_DEEP
+        : Math.min(Number.isFinite(max_tokens) && max_tokens > 0 ? max_tokens : MAX_OUTPUT_TOKENS, MAX_OUTPUT_TOKENS),
+      reasoning: { enabled: deep },
       provider: { data_collection: 'deny' },
     };
     if (Array.isArray(tools) && tools.length > 0) body.tools = tools;
