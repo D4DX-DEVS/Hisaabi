@@ -1,16 +1,44 @@
 /**
- * Proxies chat-completion requests to Google's Gemini API directly so the
- * API key never ships inside the client app. The client still speaks the
- * OpenAI-compatible shape it always has (messages / tools / tool_calls) —
- * geminiTranslator converts to and from Gemini's native request/response
- * shape here, so switching off OpenRouter never touched the Flutter side's
- * conversation history or tool-calling loop.
+ * Proxies the app's AI assistant chat to OpenRouter so the API key never
+ * ships inside the client app. The client speaks the OpenAI-compatible shape
+ * (messages / tools / tool_calls), which OpenRouter accepts as is, so this is a
+ * thin pass-through plus the things only the server can enforce:
+ *
+ *  - The model is chosen HERE. Whatever `model` a client sends is ignored —
+ *    otherwise anyone with a login could point our key at an expensive model.
+ *  - Thinking is off (it triples latency and output cost for no accuracy gain
+ *    on this app's short tool-routing turns).
+ *  - Requests only go to hosts that do not collect prompts (`data_collection:
+ *    deny`), since chats can contain prayer and fasting habits.
+ *  - Upstream failures are logged here and reported to the app as generic
+ *    errors, so provider details and key/credit problems never reach users.
  */
 const { checkAndRecord } = require('../services/aiRateLimiter');
-const { toGeminiTools, toGeminiPayload, fromGeminiResponse } = require('../services/geminiTranslator');
 
-const API_KEY = process.env.GEMINI_API_KEY;
-const DEFAULT_MODEL = 'gemini-3.6-flash';
+const API_KEY = process.env.OPENROUTER_API_KEY;
+// Overridable by env for the server owner only — never by the client.
+const MODEL = process.env.AI_MODEL || 'qwen/qwen3.7-flash';
+const MAX_OUTPUT_TOKENS = 2048;
+const TIMEOUT_MS = 60000;
+
+// Keep only the fields the OpenAI format defines. Older app sessions echo extra
+// fields back in tool calls (e.g. `thoughtSignature` from the retired Gemini
+// proxy), which other providers can reject.
+function cleanMessages(messages) {
+  return messages.map((m) => {
+    const out = { role: m.role, content: m.content ?? null };
+    if (m.name) out.name = m.name;
+    if (m.tool_call_id) out.tool_call_id = m.tool_call_id;
+    if (Array.isArray(m.tool_calls)) {
+      out.tool_calls = m.tool_calls.map((tc) => ({
+        id: tc.id,
+        type: 'function',
+        function: { name: tc.function?.name, arguments: tc.function?.arguments ?? '{}' },
+      }));
+    }
+    return out;
+  });
+}
 
 async function chat(req, res, next) {
   try {
@@ -24,40 +52,47 @@ async function chat(req, res, next) {
       return res.status(429).json({ error: 'Too many AI assistant requests — please try again later.' });
     }
 
-    const { model, messages, tools, temperature, max_tokens } = req.body;
+    const { messages, tools, temperature, max_tokens } = req.body;
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: 'messages is required' });
     }
 
-    // The client still sends OpenRouter-style "google/gemini-2.5-flash" —
-    // Gemini's own API wants just the bare model id.
-    const modelId = (model || DEFAULT_MODEL).replace(/^google\//, '');
-    const { systemInstruction, contents } = toGeminiPayload(messages);
-    const geminiTools = toGeminiTools(tools);
+    const body = {
+      model: MODEL,
+      messages: cleanMessages(messages),
+      temperature: Number.isFinite(temperature) ? Math.min(Math.max(temperature, 0), 1.5) : 0.7,
+      max_tokens: Math.min(Number.isFinite(max_tokens) && max_tokens > 0 ? max_tokens : MAX_OUTPUT_TOKENS, MAX_OUTPUT_TOKENS),
+      reasoning: { enabled: false },
+      provider: { data_collection: 'deny' },
+    };
+    if (Array.isArray(tools) && tools.length > 0) body.tools = tools;
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent`;
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': API_KEY,
-      },
-      body: JSON.stringify({
-        ...(systemInstruction && { systemInstruction }),
-        contents,
-        ...(geminiTools && { tools: geminiTools }),
-        generationConfig: {
-          temperature: temperature ?? 0.7,
-          maxOutputTokens: max_tokens ?? 2048,
+    let response;
+    try {
+      response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${API_KEY}`,
+          'X-Title': 'Hisaabi',
         },
-      }),
-    });
-
-    const data = await response.json();
-    if (!response.ok) {
-      return res.status(response.status).json(data);
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      });
+    } catch (err) {
+      console.error('[ai-assistant] upstream request failed:', err.name, err.message);
+      return res.status(err.name === 'TimeoutError' ? 504 : 502).json({ error: 'The AI assistant is not available right now. Please try again.' });
     }
-    return res.status(200).json(fromGeminiResponse(data));
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      // 401/402/403 here mean OUR key or credit is the problem, 429 is the
+      // provider being busy: none of it is the user's doing, so it is never
+      // passed on as a 4xx (the app reads 429 as "you hit your own limit").
+      console.error('[ai-assistant] upstream error:', response.status, data?.error?.message || '');
+      return res.status(503).json({ error: 'The AI assistant is not available right now. Please try again.' });
+    }
+    return res.status(200).json({ choices: data.choices || [] });
   } catch (err) {
     next(err);
   }
