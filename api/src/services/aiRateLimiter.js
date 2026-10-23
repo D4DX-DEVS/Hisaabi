@@ -17,19 +17,21 @@ const requestLog = new Map();
 
 /**
  * Records this request if the user is under their cap.
+ * `cost` is how many requests' worth it counts for (default 1) — a "deep
+ * thinking" request is slower and several times pricier, so it counts for more.
  * Returns { allowed: true } or { allowed: false, retryAfterMs }.
  */
-function checkAndRecord(userId) {
+function checkAndRecord(userId, cost = 1) {
   const now = Date.now();
   const key = userId.toString();
   const timestamps = (requestLog.get(key) || []).filter((t) => now - t < WINDOW_MS);
 
-  if (timestamps.length >= MAX_REQUESTS_PER_WINDOW) {
+  if (timestamps.length + cost > MAX_REQUESTS_PER_WINDOW) {
     const retryAfterMs = WINDOW_MS - (now - timestamps[0]);
     return { allowed: false, retryAfterMs };
   }
 
-  timestamps.push(now);
+  for (let i = 0; i < cost; i++) timestamps.push(now);
   requestLog.set(key, timestamps);
   return { allowed: true };
 }
