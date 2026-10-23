@@ -10,7 +10,11 @@
  * check that doesn't need its own collection).
  */
 const WINDOW_MS = 60 * 60 * 1000; // 1 hour
-const MAX_REQUESTS_PER_WINDOW = 30;
+// One chat message is often several requests (a lookup, then the answer, more
+// for multi-step asks), and a deep-thinking request counts for 3. At about
+// $0.0001 a request this is an abuse guard, not a cost control, so keep it roomy:
+// 120 is roughly 50 ordinary questions an hour.
+const MAX_REQUESTS_PER_WINDOW = 120;
 
 // userId -> timestamps of requests still inside the current window
 const requestLog = new Map();
