@@ -1,5 +1,5 @@
 const { GroupActivity, GroupFeedEvent, Group, User } = require('../models');
-const { emitFeedEvent } = require('./groupChallengeController');
+const { emitFeedEvent, notifyGroupMember } = require('./groupChallengeController');
 const ExcelJS = require('exceljs');
 
 const VALID_ACTIVITY_TYPES = ['daily', 'weekly', 'monthly', 'recurring'];
@@ -165,6 +165,67 @@ async function updateMyActivityStatus(req, res, next) {
       activity_name: activity.activity_name,
       my_status: updatedStatus,
     });
+  } catch (err) {
+    next(err);
+  }
+}
+
+const REMIND_COOLDOWN_MS = 60 * 60 * 1000;
+
+/**
+ * Admin nudge: one gentle reminder to every member who has not completed this
+ * activity yet. Members who muted the group or turned reminders off are
+ * skipped by notifyGroupMember. Limited to once an hour per activity so it
+ * cannot be used to pester people.
+ */
+async function remindPendingMembers(req, res, next) {
+  try {
+    const userId = req.user._id;
+    const activity = await GroupActivity.findById(req.params.activityId);
+    if (!activity) return res.status(404).json({ error: 'Activity not found' });
+
+    const group = await Group.findById(activity.group_id);
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+
+    if (!isGroupAdmin(group, userId)) {
+      return res.status(403).json({ error: 'Only group admin can send reminders' });
+    }
+
+    const last = activity.last_reminded_at ? activity.last_reminded_at.getTime() : 0;
+    const wait = last + REMIND_COOLDOWN_MS - Date.now();
+    if (wait > 0) {
+      return res.status(429).json({
+        error: `You already sent a reminder. You can send another in ${Math.ceil(wait / 60000)} minutes.`,
+      });
+    }
+
+    const done = new Set(
+      (activity.user_status || [])
+        .filter((s) => s && s.status === 'completed' && s.user)
+        .map((s) => s.user.toString())
+    );
+    const pending = group.users.filter(
+      (id) => id.toString() !== userId.toString() && !done.has(id.toString())
+    );
+
+    await Promise.all(
+      pending.map((id) =>
+        notifyGroupMember(id, group._id, {
+          title: group.name,
+          body: `A gentle reminder: "${activity.activity_name}" is still open.`,
+          data: {
+            type: 'group_reminder',
+            group_id: group.group_id,
+            activity_id: activity._id.toString(),
+          },
+        })
+      )
+    );
+
+    activity.last_reminded_at = new Date();
+    await activity.save();
+
+    return res.status(200).json({ success: true, reminded: pending.length });
   } catch (err) {
     next(err);
   }
@@ -428,6 +489,7 @@ module.exports = {
   createGroupActivity,
   getGroupActivities,
   updateMyActivityStatus,
+  remindPendingMembers,
   editGroupActivity,
   deleteGroupActivity,
   exportGroupActivities,

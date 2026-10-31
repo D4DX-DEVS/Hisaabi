@@ -1,5 +1,11 @@
 const { GroupChallenge, GroupGoal, GroupFeedEvent, GroupReminder, User } = require('../models');
-const { requireMembership, emitFeedEvent, notifyGroupMember } = require('./groupChallengeController');
+const {
+  requireMembership,
+  emitFeedEvent,
+  notifyGroupMember,
+  serializeChallenge,
+  serializeGroupGoal,
+} = require('./groupChallengeController');
 const { computeMetrics, getExemptPrayers, isPrayerExempt, FARDH_PRAYERS } = require('../services/worshipMetrics');
 const { PrayerTracking } = require('../models');
 const {
@@ -119,6 +125,34 @@ async function getGroupDashboard(req, res, next) {
     const nameById = {};
     for (const u of eventUsers) nameById[u._id.toString()] = u.name;
 
+    // Collective progress only: the shared prayer average, each goal's total
+    // against its target, each challenge's group completion. Averaged into
+    // one headline number. Nothing here is per member.
+    const memberIds = group.users.map((u) => u.toString());
+    const goalProgress = await Promise.all(
+      goals.map(async (g) => {
+        const s = await serializeGroupGoal(g, memberIds, req.user._id);
+        return { id: s.id, title: s.title, percent: s.percent };
+      })
+    );
+    const challengeProgress = await Promise.all(
+      challenges.map(async (c) => {
+        const s = await serializeChallenge(c, {}, req.user._id);
+        return { id: s.id, name: s.name, percent: s.group_percent };
+      })
+    );
+    const prayerShared = sharerCounts.prayers ? Math.round(prayerSum / sharerCounts.prayers) : null;
+    const parts = [
+      ...(prayerShared === null ? [] : [prayerShared]),
+      ...goalProgress.map((g) => g.percent),
+      ...challengeProgress.map((c) => c.percent),
+    ];
+    const overallPercent = parts.length
+      ? Math.round(parts.reduce((a, b) => a + b, 0) / parts.length)
+      : null;
+
+    const myId = req.user._id.toString();
+
     return res.status(200).json({
       group: {
         id: group._id,
@@ -141,13 +175,24 @@ async function getGroupDashboard(req, res, next) {
       sharing_members: sharerCounts,
       active_challenges: challenges.length,
       active_goals: goals.length,
-      recent_activity: recentEvents.map((e) => ({
-        id: e._id,
-        event_type: e.event_type,
-        data: e.data,
-        name: nameById[e.user_id.toString()] || null,
-        created_at: e.created_at,
-      })),
+      overall_percent: overallPercent,
+      goal_progress: goalProgress,
+      challenge_progress: challengeProgress,
+      recent_activity: recentEvents.map((e) => {
+        const counts = {};
+        for (const r of e.reactions || []) counts[r.reaction] = (counts[r.reaction] || 0) + 1;
+        const mine = (e.reactions || []).find((r) => r.user_id.toString() === myId);
+        return {
+          id: e._id,
+          user_id: e.user_id,
+          event_type: e.event_type,
+          data: e.data,
+          name: nameById[e.user_id.toString()] || null,
+          reaction_counts: counts,
+          my_reaction: mine ? mine.reaction : null,
+          created_at: e.created_at,
+        };
+      }),
       my_privacy: privacySettings(req.user).share[group._id.toString()] || {},
       my_prefs: groupPrefs(req.user, group._id),
     });
@@ -335,6 +380,38 @@ async function createReminder(req, res, next) {
   }
 }
 
+async function updateReminder(req, res, next) {
+  try {
+    const group = await requireMembership(req, res, { adminOnly: true });
+    if (!group) return;
+
+    const reminder = await GroupReminder.findOne({ _id: req.params.id, group_id: group._id });
+    if (!reminder) return res.status(404).json({ error: 'Reminder not found' });
+
+    const { title, message, frequency, time_of_day, day_of_week } = req.body;
+    if (title !== undefined) {
+      if (!String(title).trim()) return res.status(400).json({ error: 'title is required' });
+      reminder.title = String(title).trim();
+    }
+    if (message !== undefined) reminder.message = message || '';
+    if (frequency !== undefined) {
+      if (!['once', 'daily', 'weekly'].includes(frequency)) {
+        return res.status(400).json({ error: 'frequency must be once, daily or weekly' });
+      }
+      reminder.frequency = frequency;
+    }
+    if (time_of_day !== undefined) reminder.time_of_day = time_of_day || null;
+    if (day_of_week !== undefined) {
+      reminder.day_of_week = day_of_week === null ? null : Number(day_of_week);
+    }
+
+    await reminder.save();
+    return res.status(200).json({ success: true });
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function deleteReminder(req, res, next) {
   try {
     const group = await requireMembership(req, res, { adminOnly: true });
@@ -467,6 +544,7 @@ module.exports = {
   postMilestone,
   listReminders,
   createReminder,
+  updateReminder,
   deleteReminder,
   getMySettings,
   updateMySettings,

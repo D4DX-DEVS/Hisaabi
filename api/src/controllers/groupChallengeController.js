@@ -551,6 +551,8 @@ module.exports = {
   requireMembership,
   emitFeedEvent,
   notifyGroupMember,
+  serializeChallenge,
+  serializeGroupGoal,
   listChallenges,
   createChallenge,
   updateChallenge,

@@ -5,6 +5,7 @@ const {
   createGroupActivity,
   getGroupActivities,
   updateMyActivityStatus,
+  remindPendingMembers,
   editGroupActivity,
   deleteGroupActivity,
   exportGroupActivities,
@@ -15,6 +16,7 @@ router.post('/', createGroupActivity);
 router.get('/:groupId', getGroupActivities);
 router.get('/:groupId/export', exportGroupActivities);
 router.patch('/:activityId/status', updateMyActivityStatus);
+router.post('/:activityId/remind', remindPendingMembers);
 router.put('/:activityId', editGroupActivity);
 router.delete('/:activityId', deleteGroupActivity);
 

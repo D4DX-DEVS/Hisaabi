@@ -22,6 +22,7 @@ const {
   postMilestone,
   listReminders,
   createReminder,
+  updateReminder,
   deleteReminder,
   getMySettings,
   updateMySettings,
@@ -57,6 +58,7 @@ router.post('/:group_id/feed/:id/react', reactToEvent);
 // Reminders
 router.get('/:group_id/reminders', listReminders);
 router.post('/:group_id/reminders', createReminder);
+router.put('/:group_id/reminders/:id', updateReminder);
 router.delete('/:group_id/reminders/:id', deleteReminder);
 
 // Per-member privacy + notification preferences
