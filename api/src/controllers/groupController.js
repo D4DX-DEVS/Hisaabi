@@ -25,6 +25,21 @@ function isGroupAdmin(group, userId) {
   );
 }
 
+/**
+ * A member's email is personal data: only group admins, and the person
+ * themselves, may see it. Everyone else just sees the name.
+ */
+function emailFor(group, viewerId, user) {
+  if (!user || !viewerId) return undefined;
+  const viewer = viewerId.toString();
+  if (user._id.toString() === viewer) return user.email;
+  return isGroupAdmin(group, viewerId) ? user.email : undefined;
+}
+
+function publicUser(group, viewerId, user) {
+  return { id: user._id, name: user.name, email: emailFor(group, viewerId, user) };
+}
+
 function formatGroup(group, adminUser, currentUserId) {
   return {
     id: group._id,
@@ -32,9 +47,7 @@ function formatGroup(group, adminUser, currentUserId) {
     group_id: group.group_id,
     type: group.type || 'custom',
     description: group.description || '',
-    admin: adminUser
-      ? { id: adminUser._id, name: adminUser.name, email: adminUser.email }
-      : null,
+    admin: adminUser ? publicUser(group, currentUserId, adminUser) : null,
     users: group.users,
     co_admins: (group.co_admins || []).map((id) => id.toString()),
     is_admin: isGroupAdmin(group, currentUserId),
@@ -98,7 +111,7 @@ async function joinGroupByCode(req, res, next) {
       id: group._id,
       name: group.name,
       group_id: group.group_id,
-      admin: admin ? { id: admin._id, name: admin.name, email: admin.email } : null,
+      admin: admin ? publicUser(group, userId, admin) : null,
       users: group.users,
       joined_at: new Date().toISOString(),
     });
@@ -149,7 +162,7 @@ async function leaveGroup(req, res, next) {
       id: group._id,
       name: group.name,
       group_id: group.group_id,
-      admin: admin ? { id: admin._id, name: admin.name, email: admin.email } : null,
+      admin: admin ? publicUser(group, userId, admin) : null,
       users: group.users,
       left_at: new Date().toISOString(),
     });
@@ -161,8 +174,13 @@ async function leaveGroup(req, res, next) {
 async function getGroupMembers(req, res, next) {
   try {
     const { group_id } = req.params;
+    const userId = req.user._id;
     const group = await Group.findOne({ group_id });
     if (!group) return res.status(404).json({ error: 'Group not found' });
+
+    // Knowing a group's code must not be enough to read its member list.
+    const isMember = group.users.some((u) => u.toString() === userId.toString());
+    if (!isMember) return res.status(403).json({ error: 'You are not a member of this group' });
 
     const members = await User.find({ _id: { $in: group.users } });
     const admin = await User.findById(group.admin_id);
@@ -171,9 +189,9 @@ async function getGroupMembers(req, res, next) {
       id: group._id,
       name: group.name,
       group_id: group.group_id,
-      admin: admin ? { id: admin._id, name: admin.name, email: admin.email } : null,
+      admin: admin ? publicUser(group, userId, admin) : null,
       co_admins: (group.co_admins || []).map((id) => id.toString()),
-      members: members.map((m) => ({ id: m._id, name: m.name, email: m.email })),
+      members: members.map((m) => publicUser(group, userId, m)),
     });
   } catch (err) {
     next(err);
