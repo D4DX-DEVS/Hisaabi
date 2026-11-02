@@ -100,6 +100,15 @@ async function getGroupDashboard(req, res, next) {
     const contributions = await Promise.all(
       members.map((m) => memberContribution(m, group._id, startDate, endDate))
     );
+    // "Did it today" share per category, again only among members who opted in.
+    const todayContributions = await Promise.all(
+      members.map((m) => memberContribution(m, group._id, today, today))
+    );
+    const todayShare = (metric) => {
+      const sharers = todayContributions.filter((c) => c.metrics[metric] !== undefined);
+      if (!sharers.length) return null;
+      return Math.round((sharers.filter((c) => c.metrics[metric] > 0).length / sharers.length) * 100);
+    };
 
     // Aggregate: sums for count metrics, mean for prayer consistency.
     const totals = { quran_pages: 0, dhikr_count: 0, adhkar_sessions: 0, fasting_days: 0, good_deeds: 0 };
@@ -172,6 +181,11 @@ async function getGroupDashboard(req, res, next) {
         adhkar_sessions: sharerCounts.adhkar ? totals.adhkar_sessions : null,
         fasting_days: sharerCounts.fasting ? totals.fasting_days : null,
         good_deeds: sharerCounts.good_deeds ? totals.good_deeds : null,
+      },
+      today_percent: {
+        quran: todayShare('quran_pages'),
+        dhikr: todayShare('dhikr_count'),
+        fasting: todayShare('fasting_days'),
       },
       sharing_members: sharerCounts,
       active_challenges: challenges.length,
