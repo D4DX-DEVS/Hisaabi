@@ -12,6 +12,7 @@ const groupActivitySchema = new mongoose.Schema(
     description: { type: String, default: null },
     date: { type: Date, required: true },
     user_status: { type: [mongoose.Schema.Types.Mixed], default: [] },
+    last_reminded_at: { type: Date, default: null },
   },
   {
     timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },

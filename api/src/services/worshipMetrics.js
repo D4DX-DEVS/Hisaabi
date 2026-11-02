@@ -236,7 +236,13 @@ async function sumLearningMinutes(userId, startDate, endDate) {
   return records.reduce((sum, r) => sum + (r.duration_minutes || 0), 0);
 }
 
+async function countAdhkarSlot(userId, startDate, endDate, slot) {
+  const records = await AdhkarTracking.find({ user_id: userId, date: { $gte: startDate, $lte: endDate } });
+  return records.reduce((sum, r) => sum + (r[slot] ? 1 : 0), 0);
+}
+
 const COLLECTORS = {
+  prayers_total: (u, s, e) => countPrayers(u, s, e, null),
   prayers_ontime: (u, s, e) => countPrayers(u, s, e, ['j', 'ot']),
   prayers_jamaah: (u, s, e) => countPrayers(u, s, e, ['j']),
   prayers_qada: (u, s, e) => countPrayers(u, s, e, ['q']),
@@ -247,6 +253,8 @@ const COLLECTORS = {
   sunnah_prayers: countSunnahPrayers,
   fasting_days: countFastingDays,
   adhkar_sessions: countAdhkarSessions,
+  adhkar_morning: (u, s, e) => countAdhkarSlot(u, s, e, 'morning'),
+  adhkar_evening: (u, s, e) => countAdhkarSlot(u, s, e, 'evening'),
   dua_completions: countDuaCompletions,
   good_deeds: (u, s, e) => countGoodDeeds(u, s, e, null),
   learning_minutes: sumLearningMinutes,

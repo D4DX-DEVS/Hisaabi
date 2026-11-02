@@ -13,6 +13,7 @@ const mongoose = require('mongoose');
  * existing tracking data so nothing has to be entered twice.
  */
 const METRICS = [
+  'prayers_total',
   'prayers_ontime',
   'prayers_jamaah',
   'prayers_qada',
@@ -23,6 +24,8 @@ const METRICS = [
   'sunnah_prayers',
   'fasting_days',
   'adhkar_sessions',
+  'adhkar_morning',
+  'adhkar_evening',
   'dua_completions',
   'good_deeds',
   'learning_minutes',

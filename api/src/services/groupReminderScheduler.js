@@ -8,31 +8,24 @@
  * Runs on a plain setInterval — the backend has no existing job queue, and
  * a minute-granularity check against a low-volume collection doesn't need
  * one. `last_sent_at` dedupes: a 'once' reminder fires exactly once, a
- * daily/weekly one fires once per occurrence rather than once per minute
- * this happens to match.
+ * daily/weekly one fires once per local day. Before sending, a reminder is
+ * claimed atomically (findOneAndUpdate on last_sent_at) so two server
+ * instances never both send it.
  *
- * Times are interpreted in the server's own local timezone, the same
- * convention getCurrentDate() already uses everywhere else in this
- * codebase — there's no per-reminder timezone field to do otherwise.
+ * time_of_day / day_of_week are read in the reminder's own `timezone`
+ * (IANA, default Asia/Kolkata). A recurring reminder is due for
+ * CATCH_UP_MINUTES after its time, so a restart or a slow tick doesn't skip it.
  */
 const { GroupReminder, Group } = require('../models');
 const { notifyGroupMember } = require('../controllers/groupChallengeController');
+const { DEFAULT_TZ, isValidTimeZone, localParts, startOfLocalDayUTC } = require('../utils/tzUtils');
 
 const CHECK_INTERVAL_MS = 60 * 1000;
 const ONCE_LOOKBACK_MS = 24 * 60 * 60 * 1000; // ignore anything more than a day overdue
+const CATCH_UP_MINUTES = 10;
 
-function hhmm(date) {
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
-}
-
-function isSameLocalDay(a, b) {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-}
-
-// ISO-8601 weekday: 1 = Monday ... 7 = Sunday, matching the schema's 1-7 range.
-function isoWeekday(date) {
-  const day = date.getDay(); // 0 = Sunday ... 6 = Saturday
-  return day === 0 ? 7 : day;
+function reminderTz(reminder) {
+  return isValidTimeZone(reminder.timezone) ? reminder.timezone : DEFAULT_TZ;
 }
 
 function isDue(reminder, now) {
@@ -41,11 +34,16 @@ function isDue(reminder, now) {
     return reminder.send_at <= now && now - reminder.send_at <= ONCE_LOOKBACK_MS;
   }
 
-  if (!reminder.time_of_day || hhmm(now) !== reminder.time_of_day) return false;
-  if (reminder.last_sent_at && isSameLocalDay(reminder.last_sent_at, now)) return false;
+  const m = /^(\d{2}):(\d{2})$/.exec(reminder.time_of_day || '');
+  if (!m) return false;
+  const tz = reminderTz(reminder);
+  const local = localParts(now, tz);
+  const sinceTarget = local.hour * 60 + local.minute - (Number(m[1]) * 60 + Number(m[2]));
+  if (sinceTarget < 0 || sinceTarget >= CATCH_UP_MINUTES) return false;
+  if (reminder.last_sent_at && reminder.last_sent_at >= startOfLocalDayUTC(now, tz)) return false;
 
   if (reminder.frequency === 'weekly') {
-    return reminder.day_of_week === isoWeekday(now);
+    return reminder.day_of_week === local.isoWeekday;
   }
   return reminder.frequency === 'daily';
 }
@@ -53,6 +51,19 @@ function isDue(reminder, now) {
 async function fireReminder(reminder) {
   const group = await Group.findById(reminder.group_id);
   if (!group) return;
+
+  // Claim first: only the instance that wins this update sends.
+  const claimed = await GroupReminder.findOneAndUpdate(
+    {
+      _id: reminder._id,
+      $or: [
+        { last_sent_at: null },
+        { last_sent_at: { $lt: startOfLocalDayUTC(new Date(), reminderTz(reminder)) } },
+      ],
+    },
+    { $set: { last_sent_at: new Date() } }
+  );
+  if (!claimed) return;
 
   const message = {
     title: group.name,
@@ -65,9 +76,6 @@ async function fireReminder(reminder) {
   for (const memberId of group.users) {
     notifyGroupMember(memberId, group._id, message);
   }
-
-  reminder.last_sent_at = new Date();
-  await reminder.save();
 }
 
 async function tick() {
