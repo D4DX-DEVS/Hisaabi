@@ -3,7 +3,7 @@
  * reminder type, but nothing ever polled for it; only manual admin
  * broadcasts (groupReminderScheduler.js) exist today.
  *
- * Runs every 6 hours: challenge windows are date-only (`end_date` is a plain
+ * Runs every 6 hours (pushes only 08:00-21:00 in each member's timezone): challenge windows are date-only (`end_date` is a plain
  * YYYY-MM-DD string), so groupReminderScheduler's minute-granularity check
  * isn't needed here. `ending_soon_notified` dedupes per user, per challenge,
  * once ever — a member already pushed for a challenge (joined or not) is
@@ -15,45 +15,74 @@
  * notifyGroupMember call scoped to exactly one user, reporting only their
  * own status, never another member's.
  */
-const { GroupChallenge, Group } = require('../models');
-const { notifyGroupMember } = require('../controllers/groupChallengeController');
+const { GroupChallenge, Group, User } = require('../models');
+const { notifyGroupMember, participantProgress } = require('../controllers/groupChallengeController');
 const { getCurrentDate, formatDate } = require('../utils/dateUtils');
+const { DEFAULT_TZ, isValidTimeZone, localParts } = require('../utils/tzUtils');
 
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const NOTICE_WINDOW_DAYS = 2;
+// Pushes only go out 08:00-20:59 in the member's own timezone.
+const SEND_FROM_HOUR = 8;
+const SEND_UNTIL_HOUR = 21;
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+// 'YYYY-MM-DD' -> 'D MMM' (e.g. 5 Nov).
+function formatDayMonth(iso) {
+  const [, m, d] = String(iso).split('-');
+  return MONTHS[Number(m) - 1] ? `${Number(d)} ${MONTHS[Number(m) - 1]}` : String(iso);
+}
+
+function memberTz(user) {
+  const tz = user && user.settings && user.settings.other_settings && user.settings.other_settings.timezone;
+  return isValidTimeZone(tz) ? tz : DEFAULT_TZ;
+}
 
 async function notifyChallenge(challenge) {
   const group = await Group.findById(challenge.group_id);
   if (!group) return;
 
-  const joinedIds = new Set((challenge.participants || []).map((p) => p.user_id.toString()));
+  const joinedById = new Map((challenge.participants || []).map((p) => [p.user_id.toString(), p]));
   const alreadyNotified = new Set((challenge.ending_soon_notified || []).map((id) => id.toString()));
-  let changed = false;
+  const pendingIds = group.users.filter((id) => !alreadyNotified.has(id.toString()));
+  if (!pendingIds.length) return;
 
-  for (const memberId of group.users) {
+  const users = await User.find({ _id: { $in: pendingIds } }).select('settings');
+  const userById = new Map(users.map((u) => [u._id.toString(), u]));
+  const now = new Date();
+
+  for (const memberId of pendingIds) {
     const uid = memberId.toString();
-    if (alreadyNotified.has(uid)) continue;
 
-    const joined = joinedIds.has(uid);
-    const message = {
+    // Outside the member's daytime window: skip without marking, so the
+    // next tick retries.
+    const { hour } = localParts(now, memberTz(userById.get(uid)));
+    if (hour < SEND_FROM_HOUR || hour >= SEND_UNTIL_HOUR) continue;
+
+    const participant = joinedById.get(uid);
+    const joined = !!participant;
+    if (joined) {
+      // Nothing to nudge about once they have finished.
+      const progress = await participantProgress(challenge, participant);
+      if (participant.completed || progress >= challenge.target) continue;
+    }
+
+    const endsOn = formatDayMonth(challenge.end_date);
+    await notifyGroupMember(memberId, group._id, {
       title: challenge.name,
       body: joined
-        ? `Ends ${challenge.end_date} — keep going!`
-        : `Ends ${challenge.end_date} — there's still time to join.`,
+        ? `Ends ${endsOn} — keep going!`
+        : `Ends ${endsOn} — there's still time to join.`,
       data: {
         type: joined ? 'challenge_ending_soon' : 'challenge_not_joined',
         group_id: group.group_id,
         challenge_id: challenge._id.toString(),
       },
-    };
-
-    // Fire-and-forget per member — notifyGroupMember already never throws.
-    notifyGroupMember(memberId, group._id, message);
-    challenge.ending_soon_notified.push(memberId);
-    changed = true;
+    });
+    // Targeted atomic write: cannot clobber concurrent progress updates the
+    // way a whole-document save() could.
+    await GroupChallenge.updateOne({ _id: challenge._id }, { $addToSet: { ending_soon_notified: memberId } });
   }
-
-  if (changed) await challenge.save();
 }
 
 async function tick() {

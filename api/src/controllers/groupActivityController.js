@@ -191,11 +191,30 @@ async function remindPendingMembers(req, res, next) {
       return res.status(403).json({ error: 'Only group admin can send reminders' });
     }
 
-    const last = activity.last_reminded_at ? activity.last_reminded_at.getTime() : 0;
-    const wait = last + REMIND_COOLDOWN_MS - Date.now();
-    if (wait > 0) {
+    // Reminding about an activity from days ago is just noise.
+    if (activity.date && Date.now() - new Date(activity.date).getTime() > 24 * 60 * 60 * 1000) {
+      return res.status(400).json({ error: 'This activity is from an earlier day, so a reminder is no longer useful.' });
+    }
+
+    // Atomic claim of the cooldown slot: two concurrent taps cannot both pass.
+    const claimed = await GroupActivity.findOneAndUpdate(
+      {
+        _id: activity._id,
+        $or: [
+          { last_reminded_at: null },
+          { last_reminded_at: { $exists: false } },
+          { last_reminded_at: { $lt: new Date(Date.now() - REMIND_COOLDOWN_MS) } },
+        ],
+      },
+      { $set: { last_reminded_at: new Date() } },
+      { new: false }
+    );
+    if (!claimed) {
+      const fresh = await GroupActivity.findById(activity._id).select('last_reminded_at');
+      const last = fresh && fresh.last_reminded_at ? fresh.last_reminded_at.getTime() : Date.now();
+      const wait = Math.max(0, last + REMIND_COOLDOWN_MS - Date.now());
       return res.status(429).json({
-        error: `You already sent a reminder. You can send another in ${Math.ceil(wait / 60000)} minutes.`,
+        error: `You already sent a reminder. You can send another in ${Math.max(1, Math.ceil(wait / 60000))} minutes.`,
       });
     }
 
@@ -208,11 +227,13 @@ async function remindPendingMembers(req, res, next) {
       (id) => id.toString() !== userId.toString() && !done.has(id.toString())
     );
 
-    await Promise.all(
+    const name = String(activity.activity_name || '');
+    const shortName = name.length > 80 ? `${name.slice(0, 79)}…` : name;
+    const results = await Promise.all(
       pending.map((id) =>
         notifyGroupMember(id, group._id, {
           title: group.name,
-          body: `A gentle reminder: "${activity.activity_name}" is still open.`,
+          body: `A gentle reminder: "${shortName}" is still open.`,
           data: {
             type: 'group_reminder',
             group_id: group.group_id,
@@ -222,10 +243,8 @@ async function remindPendingMembers(req, res, next) {
       )
     );
 
-    activity.last_reminded_at = new Date();
-    await activity.save();
-
-    return res.status(200).json({ success: true, reminded: pending.length });
+    const reminded = results.filter(Boolean).length;
+    return res.status(200).json({ success: true, reminded });
   } catch (err) {
     next(err);
   }

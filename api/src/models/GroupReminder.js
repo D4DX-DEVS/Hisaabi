@@ -16,6 +16,9 @@ const groupReminderSchema = new mongoose.Schema(
     frequency: { type: String, enum: ['once', 'daily', 'weekly'], default: 'once' },
     time_of_day: { type: String, default: null },
     day_of_week: { type: Number, default: null, min: 1, max: 7 },
+    // IANA zone (e.g. 'Asia/Kolkata') that time_of_day / day_of_week are read
+    // in. Null falls back to Asia/Kolkata in the scheduler.
+    timezone: { type: String, default: null },
     send_at: { type: Date, default: Date.now },
     active: { type: Boolean, default: true },
     // When this reminder last actually pushed a notification — dedupes a

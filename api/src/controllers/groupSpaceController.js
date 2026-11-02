@@ -23,6 +23,7 @@ const {
 const { weekBounds } = require('./muhasabahController');
 const { getCurrentDate, getDaysBetweenDates } = require('../utils/dateUtils');
 const { REACTIONS } = require('../models/GroupFeedEvent');
+const { isValidTimeZone } = require('../utils/tzUtils');
 
 const REACTION_LABELS = {
   mashaallah: 'MashaAllah',
@@ -257,6 +258,9 @@ async function reactToEvent(req, res, next) {
     const { reaction } = req.body;
     const uid = req.user._id.toString();
     const existing = (event.reactions || []).filter((r) => r.user_id.toString() !== uid);
+    const hadSameReaction = (event.reactions || []).some(
+      (r) => r.user_id.toString() === uid && r.reaction === reaction
+    );
 
     if (reaction) {
       if (!REACTIONS.includes(reaction)) {
@@ -273,8 +277,14 @@ async function reactToEvent(req, res, next) {
 
     // Let the person who posted know someone encouraged them — unless
     // they're reacting to their own activity, or they've muted the group.
-    if (reaction && event.user_id.toString() !== uid) {
-      notifyGroupMember(event.user_id, group._id, {
+    // At most one push per (sender, event): toggling off/on or switching
+    // reactions never re-notifies. The conditional updateOne is the atomic claim.
+    if (reaction && !hadSameReaction && event.user_id.toString() !== uid) {
+      const claim = await GroupFeedEvent.updateOne(
+        { _id: event._id, notified_by: { $ne: req.user._id } },
+        { $addToSet: { notified_by: req.user._id } }
+      );
+      if (claim.modifiedCount === 1) notifyGroupMember(event.user_id, group._id, {
         title: group.name,
         body: `${req.user.name} sent you "${REACTION_LABELS[reaction] || reaction}"`,
         data: { type: 'group_encouragement', group_id: group.group_id, event_id: event._id.toString() },
@@ -342,6 +352,7 @@ async function listReminders(req, res, next) {
         frequency: r.frequency,
         time_of_day: r.time_of_day,
         day_of_week: r.day_of_week,
+        timezone: r.timezone,
         send_at: r.send_at,
         created_by: r.created_by,
       })),
@@ -352,16 +363,45 @@ async function listReminders(req, res, next) {
   }
 }
 
+/**
+ * Checks the schedule fields of a reminder (already merged with stored values
+ * on update). Returns a human message, or null when valid. day_of_week is
+ * ISO 1 (Mon) - 7 (Sun), matching the model and the scheduler.
+ */
+function reminderScheduleError({ frequency, time_of_day, day_of_week, timezone }) {
+  if (timezone && !isValidTimeZone(timezone)) {
+    return 'timezone must be a valid IANA zone such as Asia/Kolkata';
+  }
+  if (time_of_day && !/^([01]\d|2[0-3]):[0-5]\d$/.test(time_of_day)) {
+    return 'time_of_day must be in 24-hour HH:MM format, for example 07:30';
+  }
+  if ((frequency === 'daily' || frequency === 'weekly') && !time_of_day) {
+    return `Pick a time of day for a ${frequency} reminder.`;
+  }
+  if (frequency === 'weekly' && !(Number.isInteger(day_of_week) && day_of_week >= 1 && day_of_week <= 7)) {
+    return 'Pick a day of the week for a weekly reminder.';
+  }
+  return null;
+}
+
 async function createReminder(req, res, next) {
   try {
     const group = await requireMembership(req, res, { adminOnly: true });
     if (!group) return;
 
-    const { title, message, frequency, time_of_day, day_of_week, send_at } = req.body;
+    const { title, message, frequency, time_of_day, day_of_week, send_at, timezone } = req.body;
     if (!title || !String(title).trim()) return res.status(400).json({ error: 'title is required' });
     if (frequency && !['once', 'daily', 'weekly'].includes(frequency)) {
       return res.status(400).json({ error: 'frequency must be once, daily or weekly' });
     }
+    const dow = day_of_week === undefined || day_of_week === null ? null : Number(day_of_week);
+    const scheduleError = reminderScheduleError({
+      frequency: frequency || 'once',
+      time_of_day: time_of_day || null,
+      day_of_week: dow,
+      timezone,
+    });
+    if (scheduleError) return res.status(400).json({ error: scheduleError });
 
     const reminder = await GroupReminder.create({
       group_id: group._id,
@@ -370,7 +410,8 @@ async function createReminder(req, res, next) {
       message: message || '',
       frequency: frequency || 'once',
       time_of_day: time_of_day || null,
-      day_of_week: day_of_week === undefined ? null : Number(day_of_week),
+      day_of_week: dow,
+      timezone: timezone || null,
       send_at: send_at ? new Date(send_at) : new Date(),
     });
 
@@ -388,7 +429,7 @@ async function updateReminder(req, res, next) {
     const reminder = await GroupReminder.findOne({ _id: req.params.id, group_id: group._id });
     if (!reminder) return res.status(404).json({ error: 'Reminder not found' });
 
-    const { title, message, frequency, time_of_day, day_of_week } = req.body;
+    const { title, message, frequency, time_of_day, day_of_week, timezone } = req.body;
     if (title !== undefined) {
       if (!String(title).trim()) return res.status(400).json({ error: 'title is required' });
       reminder.title = String(title).trim();
@@ -404,6 +445,15 @@ async function updateReminder(req, res, next) {
     if (day_of_week !== undefined) {
       reminder.day_of_week = day_of_week === null ? null : Number(day_of_week);
     }
+    if (timezone !== undefined) reminder.timezone = timezone || null;
+
+    const scheduleError = reminderScheduleError({
+      frequency: reminder.frequency,
+      time_of_day: reminder.time_of_day,
+      day_of_week: reminder.day_of_week,
+      timezone: reminder.timezone,
+    });
+    if (scheduleError) return res.status(400).json({ error: scheduleError });
 
     await reminder.save();
     return res.status(200).json({ success: true });

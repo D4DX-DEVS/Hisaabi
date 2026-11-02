@@ -8,7 +8,8 @@ const { METRICS } = require('../models/WorshipGoal');
  * Push a notification to one member of a group, honouring their mute
  * setting for that specific group. Never throws — a failed or skipped
  * send must not break whatever action triggered it (a reaction, a
- * completed goal, a reminder).
+ * completed goal, a reminder). Resolves true when a push was actually sent,
+ * false when it was skipped (muted, reminders off, ...) or failed.
  *
  * The "Group reminders" on/off toggle and the "important only" frequency
  * option apply to admin-sent group_reminder pushes and to the automatic
@@ -25,16 +26,19 @@ const REMINDER_TYPES = new Set(['group_reminder', 'challenge_ending_soon', 'chal
 async function notifyGroupMember(userId, groupId, message) {
   try {
     const recipient = await User.findById(userId);
-    if (!recipient) return;
+    if (!recipient) return false;
     const prefs = groupPrefs(recipient, groupId);
-    if (prefs.muted) return;
+    if (prefs.muted) return false;
     if (REMINDER_TYPES.has(message.data?.type)) {
-      if (!prefs.reminders) return;
-      if (prefs.frequency === 'important_only') return;
+      if (!prefs.reminders) return false;
+      if (prefs.frequency === 'important_only') return false;
     }
-    await sendToUser(userId, message);
+    // Resolves true only when OneSignal accepted the push.
+    const result = await sendToUser(userId, message);
+    return !!(result && result.sent);
   } catch (err) {
     // Intentionally swallowed — see above.
+    return false;
   }
 }
 
@@ -332,7 +336,7 @@ async function reportChallengeProgress(req, res, next) {
       await emitFeedEvent(group._id, req.user, 'challenge_completed', { title: challenge.name });
       notifyGroupMember(req.user._id, group._id, {
         title: group.name,
-        body: `You completed "${challenge.name}" 🎉`,
+        body: `You completed "${challenge.name}"`,
         // 'challenge_completion' matches the app's own per-type mute toggle
         // (TrackerReminderType.challengeCompletion) — anything else falls
         // through to "always allowed" there and ignores that setting.
@@ -481,7 +485,7 @@ async function contributeToGroupGoal(req, res, next) {
       for (const memberId of group.users) {
         notifyGroupMember(memberId, group._id, {
           title: group.name,
-          body: `The group reached "${goal.title}" together 🎉`,
+          body: `The group reached "${goal.title}" together`,
           data: { type: 'group_goal_reached', group_id: group.group_id, goal_id: goal._id.toString() },
         });
       }
@@ -551,6 +555,7 @@ module.exports = {
   requireMembership,
   emitFeedEvent,
   notifyGroupMember,
+  participantProgress,
   serializeChallenge,
   serializeGroupGoal,
   listChallenges,

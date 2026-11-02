@@ -44,6 +44,9 @@ const groupFeedEventSchema = new mongoose.Schema(
     // holds prayer/dua/reflection detail.
     data: { type: mongoose.Schema.Types.Mixed, default: {} },
     reactions: { type: [reactionSchema], default: [] },
+    // Users already pushed a "sent you X" for this event — one push per
+    // (sender, event) no matter how often they toggle or change reactions.
+    notified_by: { type: [mongoose.Schema.Types.ObjectId], default: [] },
   },
   {
     timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },
