@@ -155,6 +155,64 @@ async function logReadingDuration(req, res, next) {
 }
 
 /**
+ * Add to (or take away from) the day's recitation counters: pages recited,
+ * counting repeats, or how many times one surah was recited. `pages` / `count`
+ * are changes (positive or negative); a counter never goes below zero.
+ */
+async function logRecitation(req, res, next) {
+  try {
+    const userId = req.user._id;
+    const { date, pages, surah, count } = req.body;
+    const targetDate = date || getCurrentDate();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) {
+      return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+    }
+    if (targetDate > getCurrentDate()) {
+      return res.status(400).json({ error: 'Cannot log recitation for a future date' });
+    }
+
+    const pageDelta = pages === undefined ? 0 : Math.trunc(Number(pages));
+    const surahNo = surah === undefined ? null : Number(surah);
+    const surahDelta = surahNo === null ? 0 : Math.trunc(Number(count === undefined ? 1 : count));
+    if (!Number.isFinite(pageDelta) || !Number.isFinite(surahDelta)) {
+      return res.status(400).json({ error: 'pages and count must be numbers' });
+    }
+    if (surahNo !== null && (!Number.isInteger(surahNo) || surahNo < 1 || surahNo > 114)) {
+      return res.status(400).json({ error: 'surah must be between 1 and 114' });
+    }
+    if (pageDelta === 0 && surahDelta === 0) {
+      return res.status(400).json({ error: 'Nothing to add: send pages, or a surah with a count' });
+    }
+    if (Math.abs(pageDelta) > 1000 || Math.abs(surahDelta) > 1000) {
+      return res.status(400).json({ error: 'That is too many at once' });
+    }
+
+    let record = await QuranReading.findOne({ user_id: userId, date: targetDate });
+    if (!record) record = new QuranReading({ user_id: userId, date: targetDate, pages_read: [] });
+
+    record.pages_recited = Math.max(0, (record.pages_recited || 0) + pageDelta);
+    if (surahNo !== null) {
+      const surahs = { ...(record.surah_recitations || {}) };
+      const next = Math.max(0, (Number(surahs[surahNo]) || 0) + surahDelta);
+      if (next === 0) delete surahs[surahNo];
+      else surahs[surahNo] = next;
+      record.surah_recitations = surahs;
+      record.markModified('surah_recitations');
+    }
+    await record.save();
+
+    return res.status(200).json({
+      success: true,
+      date: targetDate,
+      pages_recited: record.pages_recited,
+      surah_recitations: record.surah_recitations || {},
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
  * Tick or untick "listened to the Qur'an" for a given day.
  *
  * Listening is not tracked by the app (it can happen anywhere), so this is a
@@ -437,6 +495,7 @@ async function resetMemorization(req, res, next) {
 
 module.exports = {
   logReadingDuration,
+  logRecitation,
   setListened,
   getReadingProgress,
   addReadPage,

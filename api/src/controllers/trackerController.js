@@ -15,6 +15,7 @@ const { goalWithProgress } = require('./worshipGoalController');
 const { weekBounds } = require('./muhasabahController');
 const { getCurrentDate, getDaysBetweenDates, getMonthDateRange } = require('../utils/dateUtils');
 const { SURAH_PAGES, countCompletedSurahs } = require('../data/quranSurahPages');
+const { buildHabits } = require('../utils/habitsReport');
 
 /**
  * Weights for the single "overall progress" number on the Today screen.
@@ -117,6 +118,8 @@ async function getDashboard(req, res, next) {
       last_read_page: (quranRecord && quranRecord.last_read_page) || null,
       duration_minutes: (quranRecord && quranRecord.duration_minutes) || 0,
       listened: !!(quranRecord && quranRecord.listened),
+      pages_recited: (quranRecord && quranRecord.pages_recited) || 0,
+      surah_recitations: (quranRecord && quranRecord.surah_recitations) || {},
       goal: goalSettings.quran_pages || null,
       surahs_completed: countCompletedSurahs(allReadPages),
       total_pages_read: allReadPages.size,
@@ -268,7 +271,7 @@ async function getProgress(req, res, next) {
     const effectiveEnd = endDate > today ? today : endDate;
     const days = effectiveEnd >= startDate ? getDaysBetweenDates(startDate, effectiveEnd) : [];
 
-    const [totals, exemptByDay, prayerRecords, quranRecords, deedRecords, adhkarRecords, fastingRecords] =
+    const [totals, exemptByDay, prayerRecords, quranRecords, deedRecords, adhkarRecords, fastingRecords, dhikrRecords] =
       await Promise.all([
         computeMetrics(
           userId,
@@ -296,6 +299,7 @@ async function getProgress(req, res, next) {
         GoodDeedLog.find({ user_id: userId, date: { $gte: startDate, $lte: endDate } }),
         AdhkarTracking.find({ user_id: userId, date: { $gte: startDate, $lte: endDate } }),
         FastingDay.find({ user_id: userId, date: { $gte: startDate, $lte: endDate }, status: 'completed' }),
+        DhikrTracking.find({ user_id: userId, date: { $gte: startDate, $lte: endDate } }),
       ]);
 
     const prayerByDate = {};
@@ -356,6 +360,14 @@ async function getProgress(req, res, next) {
       },
       totals,
       series,
+      // Per habit: how many of the period's days it was done, and day by day.
+      habits: buildHabits(days, {
+        prayerRecords,
+        deedRecords,
+        dhikrRecords,
+        quranRecords,
+        customDeeds: (req.user.settings && req.user.settings.good_deeds) || [],
+      }),
     });
   } catch (err) {
     next(err);
