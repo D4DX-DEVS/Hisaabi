@@ -1,8 +1,16 @@
 const { GroupActivity, GroupFeedEvent, Group, User } = require('../models');
 const { emitFeedEvent, notifyGroupMember } = require('./groupChallengeController');
 const ExcelJS = require('exceljs');
+const { periodKey, resolveDay, statusesForPeriod } = require('../utils/activityPeriod');
 
 const VALID_ACTIVITY_TYPES = ['daily', 'weekly', 'monthly', 'recurring'];
+
+// Today for this request, in the caller's own timezone (or the date their app sent).
+function callerDay(req, sent) {
+  const zone = req.user && req.user.settings && req.user.settings.other_settings
+    && req.user.settings.other_settings.timezone;
+  return { day: resolveDay(sent, zone), zone };
+}
 
 function isGroupAdmin(group, userId) {
   const uid = userId.toString();
@@ -76,9 +84,12 @@ async function getGroupActivities(req, res, next) {
 
     const isAdmin = isGroupAdmin(group, userId);
     const activities = await GroupActivity.find({ group_id: groupId }).sort({ date: -1 });
+    const { day, zone } = callerDay(req, req.query.date);
 
     const formattedActivities = activities.map((a) => {
-      let user_status = a.user_status;
+      // A daily activity starts fresh each day (weekly: each week, monthly: each
+      // month); earlier periods stay stored as history but do not show as done.
+      let user_status = statusesForPeriod(a.user_status, a.activity_type, day, zone);
       if (!isAdmin) {
         user_status = user_status.filter((s) => s.user && s.user.toString() === userId.toString());
       }
@@ -89,6 +100,7 @@ async function getGroupActivities(req, res, next) {
         activity_name: a.activity_name,
         description: a.description,
         date: a.date,
+        period: periodKey(a.activity_type, day),
         user_status,
         created_at: a.created_at,
       };
@@ -108,7 +120,7 @@ async function updateMyActivityStatus(req, res, next) {
   try {
     const userId = req.user._id;
     const { activityId } = req.params;
-    const { status } = req.body;
+    const { status, date } = req.body;
 
     if (!status) return res.status(400).json({ error: 'Status is required' });
 
@@ -122,11 +134,17 @@ async function updateMyActivityStatus(req, res, next) {
     if (!isMember) return res.status(403).json({ error: 'You are not a member of this group' });
 
     const userStatuses = activity.user_status || [];
-    const idx = userStatuses.findIndex((s) => s.user && s.user.toString() === userId.toString());
+    const { day, zone } = callerDay(req, date);
+    const period = periodKey(activity.activity_type, day);
+    // This member's entry for the current period only; earlier periods are history.
+    const idx = userStatuses.findIndex(
+      (s) => s.user && s.user.toString() === userId.toString()
+        && statusesForPeriod([s], activity.activity_type, day, zone).length === 1
+    );
 
     const wasCompleted = idx !== -1 && userStatuses[idx].status === 'completed';
 
-    const updatedStatus = { user: userId, status, updatedAt: new Date().toISOString() };
+    const updatedStatus = { user: userId, status, period, updatedAt: new Date().toISOString() };
     if (idx !== -1) {
       userStatuses[idx] = updatedStatus;
     } else {
@@ -191,9 +209,10 @@ async function remindPendingMembers(req, res, next) {
       return res.status(403).json({ error: 'Only group admin can send reminders' });
     }
 
-    // Reminding about an activity from days ago is just noise.
-    if (activity.date && Date.now() - new Date(activity.date).getTime() > 24 * 60 * 60 * 1000) {
-      return res.status(400).json({ error: 'This activity is from an earlier day, so a reminder is no longer useful.' });
+    // The activity repeats each period, so it can be reminded about on any day
+    // from its start date on; who is still pending is judged for today.
+    if (activity.date && new Date(activity.date).getTime() > Date.now() + 24 * 60 * 60 * 1000) {
+      return res.status(400).json({ error: 'This activity has not started yet.' });
     }
 
     // Atomic claim of the cooldown slot: two concurrent taps cannot both pass.
@@ -218,8 +237,9 @@ async function remindPendingMembers(req, res, next) {
       });
     }
 
+    const { day, zone } = callerDay(req, req.body && req.body.date);
     const done = new Set(
-      (activity.user_status || [])
+      statusesForPeriod(activity.user_status, activity.activity_type, day, zone)
         .filter((s) => s && s.status === 'completed' && s.user)
         .map((s) => s.user.toString())
     );
@@ -338,7 +358,14 @@ async function exportGroupActivities(req, res, next) {
       return res.status(403).json({ error: 'Only group admin can export activities' });
     }
 
-    const activities = await GroupActivity.find({ group_id: groupId }).sort({ date: -1 });
+    const rawActivities = await GroupActivity.find({ group_id: groupId }).sort({ date: -1 });
+    // Summaries are for the current day/week/month of each activity.
+    const { day: exportDay, zone: exportZone } = callerDay(req);
+    const activities = rawActivities.map((a) => {
+      const copy = a.toObject();
+      copy.user_status = statusesForPeriod(a.user_status, a.activity_type, exportDay, exportZone);
+      return copy;
+    });
 
     // Get all member IDs from group users list and activity statuses
     const allMemberIds = [...new Set([
