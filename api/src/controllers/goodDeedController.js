@@ -98,8 +98,9 @@ async function deleteCustomDeed(req, res, next) {
     user.settings = settings;
     user.markModified('settings');
     await user.save();
-    // Past logs are intentionally kept — removing the activity from the list
-    // must not erase a record of good the user already did.
+    // Removing a habit removes it everywhere: its logs go too, so it no longer
+    // counts in today's total, the weekly/monthly report or the totals.
+    await GoodDeedLog.deleteMany({ user_id: user._id, deed_key: key });
     return res.status(200).json({ success: true, custom: next_ });
   } catch (err) {
     next(err);
