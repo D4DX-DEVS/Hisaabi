@@ -93,9 +93,13 @@ async function emitFeedEvent(groupId, user, eventType, data) {
 
 // ── Challenges ───────────────────────────────────────────────────────
 
+// A derived challenge counts what the app tracks, plus whatever the member
+// ticks by hand for things done outside the app (kept in `participant.progress`).
 async function participantProgress(challenge, participant) {
-  if (challenge.metric === 'manual') return participant.progress || 0;
-  return computeMetric(participant.user_id, challenge.metric, challenge.start_date, challenge.end_date);
+  const byHand = participant.progress || 0;
+  if (challenge.metric === 'manual') return byHand;
+  const tracked = await computeMetric(participant.user_id, challenge.metric, challenge.start_date, challenge.end_date);
+  return tracked + byHand;
 }
 
 /**
@@ -294,8 +298,9 @@ async function leaveChallenge(req, res, next) {
 }
 
 /**
- * Report progress on a manual challenge. Derived challenges compute their own
- * progress from tracked data and reject this call.
+ * Report progress on a challenge. On a manual challenge this is the whole
+ * progress; on one the app tracks automatically it is added on top, for what
+ * the member did outside the app.
  */
 async function reportChallengeProgress(req, res, next) {
   try {
@@ -304,9 +309,6 @@ async function reportChallengeProgress(req, res, next) {
 
     const challenge = await GroupChallenge.findOne({ _id: req.params.id, group_id: group._id });
     if (!challenge) return res.status(404).json({ error: 'Challenge not found' });
-    if (challenge.metric !== 'manual') {
-      return res.status(400).json({ error: 'This challenge tracks your activity automatically' });
-    }
 
     const uid = req.user._id.toString();
     const participant = (challenge.participants || []).find((p) => p.user_id.toString() === uid);
@@ -323,7 +325,8 @@ async function reportChallengeProgress(req, res, next) {
       participant.progress = Math.max(0, (participant.progress || 0) + d);
     }
 
-    const justCompleted = !participant.completed && participant.progress >= challenge.target;
+    const total = await participantProgress(challenge, participant);
+    const justCompleted = !participant.completed && total >= challenge.target;
     if (justCompleted) {
       participant.completed = true;
       participant.completed_at = new Date();
@@ -369,13 +372,13 @@ async function deleteChallenge(req, res, next) {
 // ── Group goals ──────────────────────────────────────────────────────
 
 async function goalTotal(goal, memberIds) {
-  if (goal.metric === 'manual') {
-    return Object.values(goal.contributions || {}).reduce((s, v) => s + (Number(v) || 0), 0);
-  }
+  const byHand = Object.values(goal.contributions || {}).reduce((s, v) => s + (Number(v) || 0), 0);
+  if (goal.metric === 'manual') return byHand;
+  // Tracked activity plus what members added by hand for things done outside the app.
   const values = await Promise.all(
     memberIds.map((id) => computeMetric(id, goal.metric, goal.start_date, goal.end_date))
   );
-  return values.reduce((s, v) => s + v, 0);
+  return values.reduce((s, v) => s + v, 0) + byHand;
 }
 
 async function serializeGroupGoal(goal, memberIds, currentUserId) {
@@ -445,7 +448,6 @@ async function createGroupGoal(req, res, next) {
       end_date,
     });
 
-    const memberIds = group.users.map((u) => u.toString());
     return res.status(200).json({
       success: true,
       goal: await serializeGroupGoal(goal, memberIds, req.user._id),
@@ -462,22 +464,20 @@ async function contributeToGroupGoal(req, res, next) {
 
     const goal = await GroupGoal.findOne({ _id: req.params.id, group_id: group._id });
     if (!goal) return res.status(404).json({ error: 'Group goal not found' });
-    if (goal.metric !== 'manual') {
-      return res.status(400).json({ error: 'This goal adds up your tracked activity automatically' });
-    }
 
     const delta = req.body.delta === undefined ? 1 : Number(req.body.delta);
     if (!Number.isFinite(delta)) return res.status(400).json({ error: 'delta must be a number' });
 
     const uid = req.user._id.toString();
+    const memberIds = group.users.map((u) => u.toString());
+    const before = await goalTotal(goal, memberIds);
     const contributions = { ...(goal.contributions || {}) };
-    const before = Object.values(contributions).reduce((s, v) => s + (Number(v) || 0), 0);
     contributions[uid] = Math.max(0, (Number(contributions[uid]) || 0) + delta);
     goal.contributions = contributions;
     goal.markModified('contributions');
     await goal.save();
 
-    const after = Object.values(contributions).reduce((s, v) => s + (Number(v) || 0), 0);
+    const after = await goalTotal(goal, memberIds);
     if (before < goal.target && after >= goal.target) {
       await emitFeedEvent(group._id, req.user, 'group_goal_reached', { title: goal.title });
       // A group goal is reached together — everyone in the group hears
@@ -491,7 +491,6 @@ async function contributeToGroupGoal(req, res, next) {
       }
     }
 
-    const memberIds = group.users.map((u) => u.toString());
     return res.status(200).json({
       success: true,
       goal: await serializeGroupGoal(goal, memberIds, req.user._id),
