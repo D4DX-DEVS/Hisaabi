@@ -7,6 +7,7 @@ const {
   removeReadPage,
   handleReadingProgress,
   logReadingDuration,
+  logRecitation,
   setListened,
   getMemorization,
   addMemorizedAyah,
@@ -23,6 +24,7 @@ router.post('/reading', addReadPage);
 // POST /reading/progress must come before DELETE /reading/:page to avoid conflict
 router.post('/reading/progress', handleReadingProgress);
 router.post('/reading/duration', logReadingDuration);
+router.post('/reading/recitation', logRecitation);
 router.post('/reading/listened', setListened);
 router.delete('/reading/:page', removeReadPage);
 

@@ -45,7 +45,7 @@ async function getCatalog(req, res, next) {
 async function addCustomDeed(req, res, next) {
   try {
     const user = req.user;
-    const { label, category, icon } = req.body;
+    const { label, category, icon, kind, target } = req.body;
     if (!label || !String(label).trim()) {
       return res.status(400).json({ error: 'label is required' });
     }
@@ -61,7 +61,18 @@ async function addCustomDeed(req, res, next) {
       return res.status(400).json({ error: 'A custom activity with that name already exists' });
     }
 
-    list.push({ key, label: String(label).trim(), category: category || 'other', icon: icon || null });
+    // A habit is either ticked (done / not done) or counted, optionally with a daily target.
+    const habitKind = kind === 'tick' ? 'tick' : 'count';
+    const dailyTarget = habitKind === 'count' && Number(target) >= 1 ? Math.min(Math.floor(Number(target)), 10000) : null;
+
+    list.push({
+      key,
+      label: String(label).trim(),
+      category: category || 'other',
+      icon: icon || null,
+      kind: habitKind,
+      target: dailyTarget,
+    });
     settings.good_deeds = list;
     user.settings = settings;
     user.markModified('settings');

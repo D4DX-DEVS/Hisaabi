@@ -10,6 +10,11 @@ const quranReadingSchema = new mongoose.Schema(
     // Ticked by the user for "I listened to the Qur'an today" — listening
     // happens outside the app too, so it's a plain daily flag, not a duration.
     listened: { type: Boolean, default: false },
+    // How many pages were recited, counting repeats (a page read three times
+    // is 3), and how many times each surah was recited ({ "36": 3 }). `pages_read`
+    // stays the set of different pages, which is what the khatm is built from.
+    pages_recited: { type: Number, default: 0, min: 0 },
+    surah_recitations: { type: mongoose.Schema.Types.Mixed, default: {} },
   },
   {
     timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },
