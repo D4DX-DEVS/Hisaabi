@@ -2,6 +2,7 @@ const { WorshipGoal } = require('../models');
 const { computeMetric } = require('../services/worshipMetrics');
 const { getCurrentDate, getMonthDateRange } = require('../utils/dateUtils');
 const { queueStreakUpdate } = require('../services/streakQueueService');
+const { sameName } = require('../utils/duplicateGuard');
 
 const METRICS = require('../models/WorshipGoal').METRICS;
 
@@ -88,6 +89,11 @@ async function createGoal(req, res, next) {
       return res.status(400).json({ error: 'period must be daily, weekly or monthly' });
     }
 
+    const mine = await WorshipGoal.find({ user_id: userId, active: true, period: period || 'daily' });
+    if (mine.some((g) => sameName(g.title, title))) {
+      return res.status(409).json({ error: 'You already have a goal with that name for this period.' });
+    }
+
     const goal = await WorshipGoal.create({
       user_id: userId,
       title: String(title).trim(),
@@ -135,6 +141,13 @@ async function updateGoal(req, res, next) {
     if (icon !== undefined) goal.icon = icon;
     if (color !== undefined) goal.color = color;
     if (active !== undefined) goal.active = active === true || active === 'true';
+
+    if (goal.active) {
+      const mine = await WorshipGoal.find({ user_id: userId, active: true, period: goal.period, _id: { $ne: goal._id } });
+      if (mine.some((g) => sameName(g.title, goal.title))) {
+        return res.status(409).json({ error: 'You already have a goal with that name for this period.' });
+      }
+    }
 
     await goal.save();
     queueStreakUpdate(userId, 'personal_goals');
