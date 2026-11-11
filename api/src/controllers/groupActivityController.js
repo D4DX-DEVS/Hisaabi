@@ -2,6 +2,7 @@ const { GroupActivity, GroupFeedEvent, Group, User } = require('../models');
 const { emitFeedEvent, notifyGroupMember } = require('./groupChallengeController');
 const ExcelJS = require('exceljs');
 const { periodKey, resolveDay, statusesForPeriod } = require('../utils/activityPeriod');
+const { sortActivities } = require('../utils/activityOrder');
 
 const VALID_ACTIVITY_TYPES = ['daily', 'weekly', 'monthly', 'recurring'];
 
@@ -83,7 +84,7 @@ async function getGroupActivities(req, res, next) {
     if (!isMember) return res.status(403).json({ error: 'You are not a member of this group' });
 
     const isAdmin = isGroupAdmin(group, userId);
-    const activities = await GroupActivity.find({ group_id: groupId }).sort({ date: -1 });
+    const activities = sortActivities(await GroupActivity.find({ group_id: groupId }));
     const { day, zone } = callerDay(req, req.query.date);
 
     const formattedActivities = activities.map((a) => {
@@ -111,6 +112,42 @@ async function getGroupActivities(req, res, next) {
       is_admin: isAdmin,
       co_admins: (group.co_admins || []).map((id) => id.toString()),
     });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// Admin sets the priority order every member sees: body { order: [activityId, ...] }.
+async function reorderGroupActivities(req, res, next) {
+  try {
+    const { groupId } = req.params;
+    const { order } = req.body;
+
+    if (!Array.isArray(order) || order.length === 0) {
+      return res.status(400).json({ error: 'order must be a non-empty list of activity ids' });
+    }
+
+    const group = await Group.findById(groupId);
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+    if (!isGroupAdmin(group, req.user._id)) {
+      return res.status(403).json({ error: 'Only group admin can reorder activities' });
+    }
+
+    const ids = order.map(String);
+    if (new Set(ids).size !== ids.length) {
+      return res.status(400).json({ error: 'order has the same activity twice' });
+    }
+    const owned = await GroupActivity.find({ group_id: groupId, _id: { $in: ids } }).select('_id');
+    if (owned.length !== ids.length) {
+      return res.status(400).json({ error: 'order has an activity that is not in this group' });
+    }
+
+    await GroupActivity.bulkWrite(
+      ids.map((id, index) => ({
+        updateOne: { filter: { _id: id, group_id: groupId }, update: { $set: { sort_order: index } } },
+      }))
+    );
+    return res.status(200).json({ success: true });
   } catch (err) {
     next(err);
   }
@@ -534,6 +571,7 @@ async function exportGroupActivities(req, res, next) {
 module.exports = {
   createGroupActivity,
   getGroupActivities,
+  reorderGroupActivities,
   updateMyActivityStatus,
   remindPendingMembers,
   editGroupActivity,

@@ -13,6 +13,8 @@ const groupActivitySchema = new mongoose.Schema(
     date: { type: Date, required: true },
     user_status: { type: [mongoose.Schema.Types.Mixed], default: [] },
     last_reminded_at: { type: Date, default: null },
+    // Position in the admin's priority order (0 = first); null until placed.
+    sort_order: { type: Number, default: null },
   },
   {
     timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },
