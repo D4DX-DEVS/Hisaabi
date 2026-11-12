@@ -1,7 +1,7 @@
 const { GroupActivity, GroupFeedEvent, Group, User } = require('../models');
 const { emitFeedEvent, notifyGroupMember } = require('./groupChallengeController');
 const ExcelJS = require('exceljs');
-const { periodKey, resolveDay, statusesForPeriod } = require('../utils/activityPeriod');
+const { periodKey, resolveDay, statusesForPeriod, recentHistory } = require('../utils/activityPeriod');
 const { sortActivities } = require('../utils/activityOrder');
 const { sameName } = require('../utils/duplicateGuard');
 
@@ -108,6 +108,7 @@ async function getGroupActivities(req, res, next) {
         description: a.description,
         date: a.date,
         period: periodKey(a.activity_type, day),
+        history: recentHistory(a.user_status, userId, a.activity_type, day, zone),
         user_status,
         created_at: a.created_at,
       };
