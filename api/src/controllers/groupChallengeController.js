@@ -3,6 +3,7 @@ const { computeMetric } = require('../services/worshipMetrics');
 const { appearsInFeed, groupPrefs } = require('../services/groupPrivacy');
 const { sendToUser } = require('../services/oneSignal');
 const { METRICS } = require('../models/WorshipGoal');
+const { sameName, rangesOverlap } = require('../utils/duplicateGuard');
 
 /**
  * Push a notification to one member of a group, honouring their mute
@@ -196,6 +197,11 @@ async function createChallenge(req, res, next) {
       return res.status(400).json({ error: `metric must be one of: ${METRICS.join(', ')}` });
     }
 
+    const running = await GroupChallenge.find({ group_id: group._id, archived: { $ne: true } });
+    if (running.some((c) => sameName(c.name, name) && rangesOverlap(c.start_date, c.end_date, start_date, end_date))) {
+      return res.status(409).json({ error: 'A challenge with this name is already running in this group for those dates.' });
+    }
+
     const challenge = await GroupChallenge.create({
       group_id: group._id,
       created_by: req.user._id,
@@ -242,6 +248,13 @@ async function updateChallenge(req, res, next) {
     }
     if (icon !== undefined) challenge.icon = icon;
     if (archived !== undefined) challenge.archived = archived === true || archived === 'true';
+
+    if (!challenge.archived) {
+      const others = await GroupChallenge.find({ group_id: group._id, archived: { $ne: true }, _id: { $ne: challenge._id } });
+      if (others.some((c) => sameName(c.name, challenge.name) && rangesOverlap(c.start_date, c.end_date, challenge.start_date, challenge.end_date))) {
+        return res.status(409).json({ error: 'A challenge with this name is already running in this group for those dates.' });
+      }
+    }
 
     await challenge.save();
     return res.status(200).json({
@@ -436,6 +449,11 @@ async function createGroupGoal(req, res, next) {
       return res.status(400).json({ error: `metric must be one of: ${METRICS.join(', ')}` });
     }
 
+    const activeGoals = await GroupGoal.find({ group_id: group._id, archived: { $ne: true } });
+    if (activeGoals.some((g) => sameName(g.title, title) && rangesOverlap(g.start_date, g.end_date, start_date, end_date))) {
+      return res.status(409).json({ error: 'A group goal with this name already covers those dates.' });
+    }
+
     const goal = await GroupGoal.create({
       group_id: group._id,
       created_by: req.user._id,
@@ -524,6 +542,13 @@ async function updateGroupGoal(req, res, next) {
       return res.status(400).json({ error: 'start_date cannot be after end_date' });
     }
     if (archived !== undefined) goal.archived = archived === true || archived === 'true';
+
+    if (!goal.archived) {
+      const others = await GroupGoal.find({ group_id: group._id, archived: { $ne: true }, _id: { $ne: goal._id } });
+      if (others.some((g) => sameName(g.title, goal.title) && rangesOverlap(g.start_date, g.end_date, goal.start_date, goal.end_date))) {
+        return res.status(409).json({ error: 'A group goal with this name already covers those dates.' });
+      }
+    }
 
     await goal.save();
     const memberIds = group.users.map((u) => u.toString());

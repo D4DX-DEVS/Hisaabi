@@ -3,6 +3,7 @@ const { emitFeedEvent, notifyGroupMember } = require('./groupChallengeController
 const ExcelJS = require('exceljs');
 const { periodKey, resolveDay, statusesForPeriod } = require('../utils/activityPeriod');
 const { sortActivities } = require('../utils/activityOrder');
+const { sameName } = require('../utils/duplicateGuard');
 
 const VALID_ACTIVITY_TYPES = ['daily', 'weekly', 'monthly', 'recurring'];
 
@@ -39,6 +40,11 @@ async function createGroupActivity(req, res, next) {
 
     if (!VALID_ACTIVITY_TYPES.includes(activity_type)) {
       return res.status(400).json({ error: `activity_type must be one of: ${VALID_ACTIVITY_TYPES.join(', ')}` });
+    }
+
+    const existing = await GroupActivity.find({ group_id, activity_type });
+    if (existing.some((a) => sameName(a.activity_name, activity_name))) {
+      return res.status(409).json({ error: 'This group already has an activity with that name and type.' });
     }
 
     // Initialize user_status for all members
@@ -342,6 +348,15 @@ async function editGroupActivity(req, res, next) {
       const d = new Date(date);
       if (isNaN(d.getTime())) return res.status(400).json({ error: 'Invalid date' });
       activity.date = d;
+    }
+
+    const siblings = await GroupActivity.find({
+      group_id: activity.group_id,
+      activity_type: activity.activity_type,
+      _id: { $ne: activity._id },
+    });
+    if (siblings.some((a) => sameName(a.activity_name, activity.activity_name))) {
+      return res.status(409).json({ error: 'This group already has an activity with that name and type.' });
     }
 
     await activity.save();
