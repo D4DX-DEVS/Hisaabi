@@ -65,4 +65,34 @@ function statusesForPeriod(entries, activityType, day, zone) {
   return (entries || []).filter((e) => entryPeriod(e, activityType, zone) === current);
 }
 
-module.exports = { dayInZone, periodKey, resolveDay, entryPeriod, statusesForPeriod };
+/** The same day (or week / month) `back` periods earlier, as a YYYY-MM-DD anchor. */
+function shiftDay(activityType, day, back) {
+  const d = new Date(`${day}T00:00:00Z`);
+  if (activityType === 'weekly') d.setUTCDate(d.getUTCDate() - 7 * back);
+  else if (activityType === 'monthly') {
+    d.setUTCDate(1);
+    d.setUTCMonth(d.getUTCMonth() - back);
+  } else d.setUTCDate(d.getUTCDate() - back);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Whether one member finished each of the last few periods, oldest first and
+ * ending with the current one: 7 days for daily, 4 weeks or 4 months otherwise.
+ */
+function recentHistory(entries, userId, activityType, day, zone) {
+  const count = activityType === 'weekly' || activityType === 'monthly' ? 4 : 7;
+  const out = [];
+  for (let back = count - 1; back >= 0; back--) {
+    const anchor = shiftDay(activityType, day, back);
+    out.push({
+      period: periodKey(activityType, anchor),
+      done: statusesForPeriod(entries, activityType, anchor, zone).some(
+        (e) => e.user && String(e.user) === String(userId) && e.status === 'completed'
+      ),
+    });
+  }
+  return out;
+}
+
+module.exports = { dayInZone, periodKey, resolveDay, entryPeriod, statusesForPeriod, recentHistory };

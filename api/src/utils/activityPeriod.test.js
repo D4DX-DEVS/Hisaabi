@@ -1,6 +1,6 @@
 // Run with: node src/utils/activityPeriod.test.js
 const assert = require('assert');
-const { periodKey, resolveDay, entryPeriod, statusesForPeriod, dayInZone } = require('./activityPeriod');
+const { periodKey, resolveDay, entryPeriod, statusesForPeriod, dayInZone, recentHistory } = require('./activityPeriod');
 
 // Keys: day, Monday-start week, month; recurring behaves like daily.
 assert.strictEqual(periodKey('daily', '2026-11-10'), 'd:2026-11-10');
@@ -32,5 +32,24 @@ const now = new Date('2026-11-10T08:00:00.000Z');
 assert.strictEqual(resolveDay('2026-11-10', zone, now), '2026-11-10');
 assert.strictEqual(resolveDay('2030-01-01', zone, now), '2026-11-10');
 assert.strictEqual(resolveDay('garbage', zone, now), '2026-11-10');
+
+// History: last 7 days for daily, ending today; earlier days stay as they were.
+const hist = recentHistory(
+  [
+    { user: 'a', status: 'completed', period: 'd:2026-11-10' },
+    { user: 'a', status: 'completed', period: 'd:2026-11-12' },
+    { user: 'b', status: 'completed', period: 'd:2026-11-13' },
+  ],
+  'a', 'daily', '2026-11-13', 'Asia/Kolkata'
+);
+assert.strictEqual(hist.length, 7);
+assert.strictEqual(hist[6].period, 'd:2026-11-13');
+assert.deepStrictEqual(hist.filter((h) => h.done).map((h) => h.period), ['d:2026-11-10', 'd:2026-11-12']);
+const wk = recentHistory([{ user: 'a', status: 'completed', period: 'w:2026-11-02' }], 'a', 'weekly', '2026-11-13', 'Asia/Kolkata');
+assert.strictEqual(wk.length, 4);
+assert.deepStrictEqual(wk.map((h) => h.period), ['w:2026-10-19', 'w:2026-10-26', 'w:2026-11-02', 'w:2026-11-09']);
+assert.deepStrictEqual(wk.map((h) => h.done), [false, false, true, false]);
+const mo = recentHistory([], 'a', 'monthly', '2026-11-13', 'Asia/Kolkata');
+assert.deepStrictEqual(mo.map((h) => h.period), ['m:2026-08', 'm:2026-09', 'm:2026-10', 'm:2026-11']);
 
 console.log('activityPeriod: all checks passed');
