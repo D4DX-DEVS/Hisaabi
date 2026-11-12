@@ -466,6 +466,7 @@ async function createGroupGoal(req, res, next) {
       end_date,
     });
 
+    const memberIds = group.users.map((u) => u.toString());
     return res.status(200).json({
       success: true,
       goal: await serializeGroupGoal(goal, memberIds, req.user._id),
