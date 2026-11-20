@@ -22,7 +22,8 @@ const {
 } = require('../services/groupPrivacy');
 const { weekBounds } = require('./muhasabahController');
 const { getCurrentDate, getDaysBetweenDates } = require('../utils/dateUtils');
-const { assertDateRange } = require('../utils/inputGuard');
+const { assertDateRange, isYmd } = require('../utils/inputGuard');
+const { resolveDay } = require('../utils/activityPeriod');
 const { REACTIONS } = require('../models/GroupFeedEvent');
 const { isValidTimeZone } = require('../utils/tzUtils');
 
@@ -90,9 +91,13 @@ async function getGroupDashboard(req, res, next) {
     const group = await requireMembership(req, res);
     if (!group) return;
 
-    const anchor = req.query.date || getCurrentDate();
+    // "Today" is the caller's day (the date the app sends, if sane, else the day
+    // in their account's timezone), not the server's: for someone far from the
+    // server the "today" percentages showed yesterday for hours.
+    const zone = req.user.settings && req.user.settings.other_settings && req.user.settings.other_settings.timezone;
+    const today = resolveDay(req.query.date, zone);
+    const anchor = isYmd(req.query.date) ? req.query.date : today;
     const { week_start, week_end } = weekBounds(anchor);
-    const today = getCurrentDate();
     const endDate = week_end > today ? today : week_end;
     const startDate = week_start > endDate ? endDate : week_start;
 

@@ -174,7 +174,9 @@ async function incrementGoal(req, res, next) {
 
     const dateStr = req.body.date || getCurrentDate();
     const delta = req.body.delta === undefined ? 1 : Number(req.body.delta);
-    if (!Number.isFinite(delta)) return res.status(400).json({ error: 'delta must be a number' });
+    if (!Number.isFinite(delta) || Math.abs(delta) > 100000) {
+      return res.status(400).json({ error: 'delta must be a number between -100000 and 100000' });
+    }
 
     const { start } = periodBounds(goal.period, dateStr);
     const progress = { ...(goal.manual_progress || {}) };

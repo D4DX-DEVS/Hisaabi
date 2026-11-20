@@ -1,5 +1,10 @@
 const { GoodDeedLog, ActivityLog } = require('../models');
-const { getCurrentDate } = require('../utils/dateUtils');
+const { getCurrentDate, latestAllowedDate } = require('../utils/dateUtils');
+const { assertString, isYmd } = require('../utils/inputGuard');
+const { sameName } = require('../utils/duplicateGuard');
+
+// A person's own list of custom habits stays a sensible size.
+const MAX_CUSTOM_DEEDS = 50;
 
 // Predefined deeds shipped with the app. `custom:<slug>` keys are user-created
 // and stored in User.settings.good_deeds so they survive across devices.
@@ -45,20 +50,30 @@ async function getCatalog(req, res, next) {
 async function addCustomDeed(req, res, next) {
   try {
     const user = req.user;
-    const { label, category, icon, kind, target } = req.body;
-    if (!label || !String(label).trim()) {
+    const { category, icon, kind, target } = req.body;
+    if (!req.body.label || !String(req.body.label).trim()) {
       return res.status(400).json({ error: 'label is required' });
     }
+    const label = assertString(req.body.label, 'label', 60);
 
-    const slug = String(label).trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
-    if (!slug) return res.status(400).json({ error: 'label must contain letters or numbers' });
-
-    const key = `custom:${slug}`;
+    // Letters and digits make a readable key. A name with none of them in the
+    // Latin alphabet (Arabic, Urdu, Malayalam) used to be refused outright; it
+    // gets a unique key instead.
+    const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
     const settings = user.settings ? JSON.parse(JSON.stringify(user.settings)) : {};
     const list = Array.isArray(settings.good_deeds) ? settings.good_deeds : [];
 
-    if (list.some((d) => d.key === key)) {
+    // The same name twice (in any language) is a duplicate.
+    if (list.some((d) => sameName(d.label, label))) {
       return res.status(400).json({ error: 'A custom activity with that name already exists' });
+    }
+    // Different names that make the same key ("Read-Quran", "Read Quran") get
+    // their own key rather than clobbering each other.
+    const base = `custom:${slug || `h${Date.now().toString(36)}`}`;
+    let key = base;
+    for (let n = 2; list.some((d) => d.key === key); n++) key = `${base}_${n}`;
+    if (list.length >= MAX_CUSTOM_DEEDS) {
+      return res.status(400).json({ error: `You can keep up to ${MAX_CUSTOM_DEEDS} custom activities` });
     }
 
     // A habit is either ticked (done / not done) or counted, optionally with a daily target.
@@ -67,9 +82,9 @@ async function addCustomDeed(req, res, next) {
 
     list.push({
       key,
-      label: String(label).trim(),
-      category: category || 'other',
-      icon: icon || null,
+      label,
+      category: typeof category === 'string' && category.length <= 40 ? category : 'other',
+      icon: typeof icon === 'string' && icon.length <= 40 ? icon : null,
       kind: habitKind,
       target: dailyTarget,
     });
@@ -129,17 +144,32 @@ async function getDeeds(req, res, next) {
 async function logDeed(req, res, next) {
   try {
     const userId = req.user._id;
-    const { deed_key, label, category, count, notes, duration_minutes, date } = req.body;
-    if (!deed_key) return res.status(400).json({ error: 'deed_key is required' });
+    const { label, category, count, notes, duration_minutes, date } = req.body;
+    if (!req.body.deed_key) return res.status(400).json({ error: 'deed_key is required' });
+    const deed_key = assertString(req.body.deed_key, 'deed_key', 80);
 
     const targetDate = date || getCurrentDate();
-    const resolvedCount = Number(count);
+    if (!isYmd(targetDate)) return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+    if (targetDate > latestAllowedDate()) {
+      return res.status(400).json({ error: 'Cannot log this for a day that has not come yet' });
+    }
+    if (label !== undefined && label !== null && (typeof label !== 'string' || label.length > 80)) {
+      return res.status(400).json({ error: 'label must be text of at most 80 characters' });
+    }
+    if (notes !== undefined && notes !== null && (typeof notes !== 'string' || notes.length > 500)) {
+      return res.status(400).json({ error: 'notes must be text of at most 500 characters' });
+    }
+    if (duration_minutes !== undefined && duration_minutes !== null
+      && !(Number.isFinite(Number(duration_minutes)) && Number(duration_minutes) >= 0 && Number(duration_minutes) <= 1440)) {
+      return res.status(400).json({ error: 'duration_minutes must be between 0 and 1440' });
+    }
+    const resolvedCount = Math.floor(Number(count));
     const known = CATALOG.find((c) => c.key === deed_key);
 
     // count 0 means "undo today's entry" — cleaner than a separate delete call
     // from a tap-to-toggle UI.
-    if (count !== undefined && (!Number.isFinite(resolvedCount) || resolvedCount < 0)) {
-      return res.status(400).json({ error: 'count must be a non-negative number' });
+    if (count !== undefined && (!Number.isFinite(resolvedCount) || resolvedCount < 0 || resolvedCount > 10000)) {
+      return res.status(400).json({ error: 'count must be a whole number from 0 to 10000' });
     }
     if (resolvedCount === 0) {
       await GoodDeedLog.deleteOne({ user_id: userId, date: targetDate, deed_key });
@@ -151,7 +181,7 @@ async function logDeed(req, res, next) {
       {
         $set: {
           label: label || (known ? null : deed_key.replace(/^custom:/, '').replace(/_/g, ' ')),
-          category: category || (known ? known.category : 'other'),
+          category: (typeof category === 'string' && category.length <= 40 ? category : null) || (known ? known.category : 'other'),
           count: Number.isFinite(resolvedCount) && resolvedCount > 0 ? resolvedCount : 1,
           notes: notes === undefined ? null : notes,
           duration_minutes: duration_minutes === undefined ? null : duration_minutes,
