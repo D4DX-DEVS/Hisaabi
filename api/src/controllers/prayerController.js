@@ -1,6 +1,7 @@
 const { PrayerTracking, ActivityLog, User, PeriodTracking } = require('../models');
 const { queueStreakUpdate } = require('../services/streakQueueService');
 const { getCurrentDate, getDaysBetweenDates, getMonthDateRange } = require('../utils/dateUtils');
+const { isYmd } = require('../utils/inputGuard');
 const { getExemptPrayers, isPrayerExempt } = require('../services/worshipMetrics');
 
 const FARDH_PRAYERS = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
@@ -21,6 +22,24 @@ async function getPrayerTracking(req, res, next) {
   }
 }
 
+// One atomic upsert per tap: two taps at once cannot overwrite each other's
+// field, and the unique (user, date) index makes a racing insert retry as an update.
+async function upsertPrayer(userId, date, set, unset) {
+  const update = { $set: set };
+  if (Object.keys(unset).length) update.$unset = unset;
+  const opts = { upsert: true, new: true };
+  try {
+    return await PrayerTracking.findOneAndUpdate({ user_id: userId, date }, update, opts);
+  } catch (err) {
+    if (err && err.code === 11000) {
+      return PrayerTracking.findOneAndUpdate({ user_id: userId, date }, update, opts);
+    }
+    throw err;
+  }
+}
+
+const NAME_RE = /^[A-Za-z0-9_]{1,40}$/;
+
 async function updateFardhPrayer(req, res, next) {
   try {
     const userId = req.user._id;
@@ -30,29 +49,21 @@ async function updateFardhPrayer(req, res, next) {
     if (!prayer_name || completed === undefined) {
       return res.status(400).json({ error: 'prayer_name and completed are required' });
     }
+    if (!isYmd(targetDate)) return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
     if (!FARDH_PRAYERS.includes(prayer_name)) {
       return res.status(400).json({ error: `Invalid prayer name. Must be one of: ${FARDH_PRAYERS.join(', ')}` });
     }
 
-    let record = await PrayerTracking.findOne({ user_id: userId, date: targetDate });
-    if (!record) {
-      record = new PrayerTracking({ user_id: userId, date: targetDate, fardh_prayers: {}, sunnah_prayers: {} });
-    }
-
-    const fp = record.fardh_prayers ? { ...record.fardh_prayers } : {};
-    fp[prayer_name] = completed === true || completed === 'true';
-
-    if (completed === true || completed === 'true') {
-      if (mode && ['j', 'ot', 'l', 'q'].includes(mode)) {
-        fp[`${prayer_name}_m`] = mode;
-      }
+    const done = completed === true || completed === 'true';
+    const set = { [`fardh_prayers.${prayer_name}`]: done };
+    const unset = {};
+    if (done) {
+      if (mode && ['j', 'ot', 'l', 'q'].includes(mode)) set[`fardh_prayers.${prayer_name}_m`] = mode;
     } else {
-      delete fp[`${prayer_name}_m`];
+      unset[`fardh_prayers.${prayer_name}_m`] = '';
     }
-
-    record.fardh_prayers = fp;
-    record.markModified('fardh_prayers');
-    await record.save();
+    const record = await upsertPrayer(userId, targetDate, set, unset);
+    const fp = record.fardh_prayers;
 
     // Log activity
     ActivityLog.create({
@@ -86,20 +97,15 @@ async function updateSunnahPrayer(req, res, next) {
     if (!prayer_name || count === undefined) {
       return res.status(400).json({ error: 'prayer_name and count are required' });
     }
-    if (typeof count !== 'number' || count < 0) {
+    if (!isYmd(targetDate)) return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+    if (typeof prayer_name !== 'string' || !NAME_RE.test(prayer_name)) {
+      return res.status(400).json({ error: 'invalid prayer_name' });
+    }
+    if (typeof count !== 'number' || !Number.isFinite(count) || count < 0) {
       return res.status(400).json({ error: 'count must be a non-negative integer' });
     }
 
-    let record = await PrayerTracking.findOne({ user_id: userId, date: targetDate });
-    if (!record) {
-      record = new PrayerTracking({ user_id: userId, date: targetDate, fardh_prayers: {}, sunnah_prayers: {} });
-    }
-
-    const sp = record.sunnah_prayers ? { ...record.sunnah_prayers } : {};
-    sp[prayer_name] = count;
-    record.sunnah_prayers = sp;
-    record.markModified('sunnah_prayers');
-    await record.save();
+    const record = await upsertPrayer(userId, targetDate, { [`sunnah_prayers.${prayer_name}`]: count }, {});
 
     // Log activity
     ActivityLog.create({
