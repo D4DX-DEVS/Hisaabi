@@ -19,6 +19,9 @@ const groupGoalSchema = new mongoose.Schema(
     // Manual contributions, keyed by user id. Summed for the group total.
     contributions: { type: mongoose.Schema.Types.Mixed, default: {} },
     archived: { type: Boolean, default: false },
+    // Set once the "reached together" announcement has gone out, so a total
+    // that dips and crosses the target again cannot announce it twice.
+    reached_notified: { type: Boolean, default: false },
   },
   {
     timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },

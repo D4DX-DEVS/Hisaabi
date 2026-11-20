@@ -1,4 +1,6 @@
 const { Group, User } = require('../models');
+const { assertString } = require('../utils/inputGuard');
+const { removeMemberData } = require('../services/groupCleanup');
 
 function generateGroupId() {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -94,8 +96,9 @@ async function createGroup(req, res, next) {
 async function joinGroupByCode(req, res, next) {
   try {
     const userId = req.user._id;
-    const { group_id } = req.body;
-    if (!group_id) return res.status(400).json({ error: 'Group ID is required' });
+    if (!req.body.group_id) return res.status(400).json({ error: 'Group ID is required' });
+    // The code must be plain text: an object here would be run as a query.
+    const group_id = assertString(req.body.group_id, 'Group ID', 20);
 
     const group = await Group.findOne({ group_id });
     if (!group) return res.status(404).json({ error: 'Group not found' });
@@ -156,6 +159,7 @@ async function leaveGroup(req, res, next) {
     group.users = group.users.filter((u) => u.toString() !== userId.toString());
     group.co_admins = (group.co_admins || []).filter((id) => id.toString() !== userId.toString());
     await group.save();
+    await removeMemberData(group._id, userId);
 
     const admin = await User.findById(group.admin_id);
     return res.status(200).json({
@@ -220,6 +224,15 @@ async function updateGroup(req, res, next) {
     if (type !== undefined) {
       const allowed = ['family', 'friends', 'study_circle', 'masjid', 'ramadan', 'community', 'custom'];
       if (!allowed.includes(type)) return res.status(400).json({ error: `type must be one of: ${allowed.join(', ')}` });
+      // The day-by-day prayer log is for family groups only. Leaving that type
+      // withdraws every member's consent, so switching back later cannot
+      // expose their prayers again without them agreeing afresh.
+      if (group.type === 'family' && type !== 'family') {
+        await User.updateMany(
+          { _id: { $in: group.users } },
+          { $unset: { [`settings.privacy.family_share.${group._id}`]: '' } }
+        );
+      }
       group.type = type;
     }
 
@@ -321,6 +334,7 @@ async function removeMember(req, res, next) {
     group.users = group.users.filter((u) => u.toString() !== user_id);
     group.co_admins = (group.co_admins || []).filter((id) => id.toString() !== user_id);
     await group.save();
+    await removeMemberData(group._id, user_id);
 
     return res.status(200).json({ success: true });
   } catch (err) {

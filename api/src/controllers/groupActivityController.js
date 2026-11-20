@@ -575,7 +575,13 @@ async function exportGroupActivities(req, res, next) {
     });
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="${group.name}_activities_export.xlsx"`);
+    // ASCII fallback for old clients plus the UTF-8 name: a header cannot carry
+    // quotes, newlines or non-Latin characters raw (Arabic names threw a 500).
+    const asciiName = String(group.name).replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '') || 'group';
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${asciiName}_activities_export.xlsx"; filename*=UTF-8''${encodeURIComponent(group.name)}_activities_export.xlsx`
+    );
 
     await workbook.xlsx.write(res);
     res.end();

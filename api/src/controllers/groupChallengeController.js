@@ -1,9 +1,11 @@
 const { Group, GroupChallenge, GroupGoal, GroupFeedEvent, User } = require('../models');
 const { computeMetric } = require('../services/worshipMetrics');
-const { appearsInFeed, groupPrefs } = require('../services/groupPrivacy');
+const { appearsInFeed, groupPrefs, sharesCategory } = require('../services/groupPrivacy');
 const { sendToUser } = require('../services/oneSignal');
 const { METRICS } = require('../models/WorshipGoal');
 const { sameName, rangesOverlap } = require('../utils/duplicateGuard');
+const { InputError, assertDateRange, assertString } = require('../utils/inputGuard');
+const { formatDate } = require('../utils/dateUtils');
 
 /**
  * Push a notification to one member of a group, honouring their mute
@@ -40,6 +42,59 @@ async function notifyGroupMember(userId, groupId, message) {
   } catch (err) {
     // Intentionally swallowed — see above.
     return false;
+  }
+}
+
+// Which sharing switch a tracked measure falls under. A group goal counts a
+// member's tracked activity only if that member switched that category on for
+// this group; anything missing here is private and counts for nothing.
+const METRIC_CATEGORY = {
+  prayers_total: 'prayers',
+  prayers_ontime: 'prayers',
+  prayers_jamaah: 'prayers',
+  sunnah_prayers: 'prayers',
+  quran_pages: 'quran',
+  quran_ayahs: 'quran',
+  quran_minutes: 'quran',
+  dhikr_count: 'dhikr',
+  fasting_days: 'fasting',
+  adhkar_sessions: 'adhkar',
+  adhkar_morning: 'adhkar',
+  adhkar_evening: 'adhkar',
+  good_deeds: 'good_deeds',
+  learning_minutes: 'good_deeds',
+};
+
+// Missed or personal by the privacy rules: never a tracked group measure.
+const PRIVATE_METRICS = new Set(['prayers_qada', 'dua_completions']);
+
+const MAX_STEP = 100000;
+const MAX_TOTAL = 10000000;
+
+/** A +/- step from the client: a finite number of sane size. */
+function boundedStep(raw) {
+  const n = raw === undefined ? 1 : Number(raw);
+  if (!Number.isFinite(n) || Math.abs(n) > MAX_STEP) {
+    throw new InputError(`delta must be a number between -${MAX_STEP} and ${MAX_STEP}`);
+  }
+  return n;
+}
+
+/** Optional free text: must be text, and short. */
+function cleanDescription(value) {
+  if (value === undefined || value === null || value === '') return '';
+  if (typeof value !== 'string' || value.length > 500) {
+    throw new InputError('description must be text of at most 500 characters');
+  }
+  return value;
+}
+
+/** Challenges that have ended or been archived take no more joins or progress. */
+function assertChallengeOpen(challenge) {
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (challenge.archived || challenge.end_date < formatDate(yesterday)) {
+    throw new InputError('This challenge has ended');
   }
 }
 
@@ -81,6 +136,17 @@ async function requireMembership(req, res, { adminOnly = false } = {}) {
 async function emitFeedEvent(groupId, user, eventType, data) {
   try {
     if (!appearsInFeed(user)) return;
+    // The same person doing the same thing again within a day (join, leave,
+    // join...) is one event, not a stream of them.
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const repeat = await GroupFeedEvent.findOne({
+      group_id: groupId,
+      user_id: user._id,
+      event_type: eventType,
+      'data.title': (data && data.title) || null,
+      created_at: { $gte: since },
+    });
+    if (repeat) return;
     await GroupFeedEvent.create({
       group_id: groupId,
       user_id: user._id,
@@ -187,7 +253,10 @@ async function createChallenge(req, res, next) {
     const { name, description, start_date, end_date, metric, target, icon } = req.body;
     if (!name || !String(name).trim()) return res.status(400).json({ error: 'name is required' });
     if (!start_date || !end_date) return res.status(400).json({ error: 'start_date and end_date are required' });
+    assertDateRange(start_date, end_date);
     if (start_date > end_date) return res.status(400).json({ error: 'start_date cannot be after end_date' });
+    assertString(name, 'name', 100);
+    const cleanDesc = cleanDescription(description);
 
     const numericTarget = Number(target);
     if (!Number.isFinite(numericTarget) || numericTarget < 1) {
@@ -206,7 +275,7 @@ async function createChallenge(req, res, next) {
       group_id: group._id,
       created_by: req.user._id,
       name: String(name).trim(),
-      description: description || '',
+      description: cleanDesc,
       start_date,
       end_date,
       metric: metric || 'manual',
@@ -232,10 +301,11 @@ async function updateChallenge(req, res, next) {
     if (!challenge) return res.status(404).json({ error: 'Challenge not found' });
 
     const { name, description, start_date, end_date, target, icon, archived } = req.body;
-    if (name !== undefined) challenge.name = String(name).trim();
-    if (description !== undefined) challenge.description = description;
+    if (name !== undefined) challenge.name = assertString(name, 'name', 100);
+    if (description !== undefined) challenge.description = cleanDescription(description);
     if (start_date !== undefined) challenge.start_date = start_date;
     if (end_date !== undefined) challenge.end_date = end_date;
+    assertDateRange(challenge.start_date, challenge.end_date);
     if (challenge.start_date > challenge.end_date) {
       return res.status(400).json({ error: 'start_date cannot be after end_date' });
     }
@@ -273,6 +343,7 @@ async function joinChallenge(req, res, next) {
 
     const challenge = await GroupChallenge.findOne({ _id: req.params.id, group_id: group._id });
     if (!challenge) return res.status(404).json({ error: 'Challenge not found' });
+    assertChallengeOpen(challenge);
 
     const uid = req.user._id.toString();
     const already = (challenge.participants || []).some((p) => p.user_id.toString() === uid);
@@ -322,6 +393,7 @@ async function reportChallengeProgress(req, res, next) {
 
     const challenge = await GroupChallenge.findOne({ _id: req.params.id, group_id: group._id });
     if (!challenge) return res.status(404).json({ error: 'Challenge not found' });
+    assertChallengeOpen(challenge);
 
     const uid = req.user._id.toString();
     const participant = (challenge.participants || []).find((p) => p.user_id.toString() === uid);
@@ -330,12 +402,13 @@ async function reportChallengeProgress(req, res, next) {
     const { progress, delta } = req.body;
     if (progress !== undefined) {
       const n = Number(progress);
-      if (!Number.isFinite(n) || n < 0) return res.status(400).json({ error: 'progress must be a non-negative number' });
+      if (!Number.isFinite(n) || n < 0 || n > MAX_TOTAL) {
+        return res.status(400).json({ error: `progress must be a number from 0 to ${MAX_TOTAL}` });
+      }
       participant.progress = n;
     } else {
-      const d = delta === undefined ? 1 : Number(delta);
-      if (!Number.isFinite(d)) return res.status(400).json({ error: 'delta must be a number' });
-      participant.progress = Math.max(0, (participant.progress || 0) + d);
+      const d = boundedStep(delta);
+      participant.progress = Math.min(MAX_TOTAL, Math.max(0, (participant.progress || 0) + d));
     }
 
     const total = await participantProgress(challenge, participant);
@@ -387,9 +460,15 @@ async function deleteChallenge(req, res, next) {
 async function goalTotal(goal, memberIds) {
   const byHand = Object.values(goal.contributions || {}).reduce((s, v) => s + (Number(v) || 0), 0);
   if (goal.metric === 'manual') return byHand;
-  // Tracked activity plus what members added by hand for things done outside the app.
+  // A private measure has no tracked part, only what members added by hand.
+  const category = METRIC_CATEGORY[goal.metric];
+  if (!category) return byHand;
+  // Tracked activity counts only for members who switched this category on
+  // for this group, plus what members added by hand outside the app.
+  const members = await User.find({ _id: { $in: memberIds } }).select('settings');
+  const sharers = members.filter((u) => sharesCategory(u, goal.group_id, category));
   const values = await Promise.all(
-    memberIds.map((id) => computeMetric(id, goal.metric, goal.start_date, goal.end_date))
+    sharers.map((u) => computeMetric(u._id, goal.metric, goal.start_date, goal.end_date))
   );
   return values.reduce((s, v) => s + v, 0) + byHand;
 }
@@ -439,7 +518,13 @@ async function createGroupGoal(req, res, next) {
     const { title, description, metric, target, period, start_date, end_date } = req.body;
     if (!title || !String(title).trim()) return res.status(400).json({ error: 'title is required' });
     if (!start_date || !end_date) return res.status(400).json({ error: 'start_date and end_date are required' });
+    assertDateRange(start_date, end_date);
     if (start_date > end_date) return res.status(400).json({ error: 'start_date cannot be after end_date' });
+    assertString(title, 'title', 100);
+    const cleanDesc = cleanDescription(description);
+    if (PRIVATE_METRICS.has(metric)) {
+      return res.status(400).json({ error: 'That measure is private and cannot be a group goal' });
+    }
 
     const numericTarget = Number(target);
     if (!Number.isFinite(numericTarget) || numericTarget < 1) {
@@ -458,7 +543,7 @@ async function createGroupGoal(req, res, next) {
       group_id: group._id,
       created_by: req.user._id,
       title: String(title).trim(),
-      description: description || '',
+      description: cleanDesc,
       metric: metric || 'manual',
       target: numericTarget,
       period: period || 'monthly',
@@ -484,20 +569,21 @@ async function contributeToGroupGoal(req, res, next) {
     const goal = await GroupGoal.findOne({ _id: req.params.id, group_id: group._id });
     if (!goal) return res.status(404).json({ error: 'Group goal not found' });
 
-    const delta = req.body.delta === undefined ? 1 : Number(req.body.delta);
-    if (!Number.isFinite(delta)) return res.status(400).json({ error: 'delta must be a number' });
+    const delta = boundedStep(req.body.delta);
 
     const uid = req.user._id.toString();
     const memberIds = group.users.map((u) => u.toString());
     const before = await goalTotal(goal, memberIds);
     const contributions = { ...(goal.contributions || {}) };
-    contributions[uid] = Math.max(0, (Number(contributions[uid]) || 0) + delta);
+    contributions[uid] = Math.min(MAX_TOTAL, Math.max(0, (Number(contributions[uid]) || 0) + delta));
     goal.contributions = contributions;
     goal.markModified('contributions');
     await goal.save();
 
     const after = await goalTotal(goal, memberIds);
-    if (before < goal.target && after >= goal.target) {
+    if (before < goal.target && after >= goal.target && !goal.reached_notified) {
+      goal.reached_notified = true;
+      await goal.save();
       await emitFeedEvent(group._id, req.user, 'group_goal_reached', { title: goal.title });
       // A group goal is reached together — everyone in the group hears
       // about it, not just whoever's contribution tipped it over.
@@ -528,8 +614,8 @@ async function updateGroupGoal(req, res, next) {
     if (!goal) return res.status(404).json({ error: 'Group goal not found' });
 
     const { title, description, target, start_date, end_date, archived } = req.body;
-    if (title !== undefined) goal.title = String(title).trim();
-    if (description !== undefined) goal.description = description;
+    if (title !== undefined) goal.title = assertString(title, 'title', 100);
+    if (description !== undefined) goal.description = cleanDescription(description);
     if (target !== undefined) {
       const numericTarget = Number(target);
       if (!Number.isFinite(numericTarget) || numericTarget < 1) {
@@ -539,6 +625,7 @@ async function updateGroupGoal(req, res, next) {
     }
     if (start_date !== undefined) goal.start_date = start_date;
     if (end_date !== undefined) goal.end_date = end_date;
+    assertDateRange(goal.start_date, goal.end_date);
     if (goal.start_date > goal.end_date) {
       return res.status(400).json({ error: 'start_date cannot be after end_date' });
     }

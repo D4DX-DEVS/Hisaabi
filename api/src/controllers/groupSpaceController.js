@@ -22,6 +22,7 @@ const {
 } = require('../services/groupPrivacy');
 const { weekBounds } = require('./muhasabahController');
 const { getCurrentDate, getDaysBetweenDates } = require('../utils/dateUtils');
+const { assertDateRange } = require('../utils/inputGuard');
 const { REACTIONS } = require('../models/GroupFeedEvent');
 const { isValidTimeZone } = require('../utils/tzUtils');
 
@@ -334,7 +335,21 @@ async function postMilestone(req, res, next) {
     const safeData = {};
     if (data && typeof data === 'object') {
       if (data.title !== undefined) safeData.title = String(data.title).slice(0, 120);
-      if (data.count !== undefined) safeData.count = Number(data.count) || 0;
+      if (data.count !== undefined) {
+        safeData.count = Math.min(1000, Math.max(0, Math.floor(Number(data.count) || 0)));
+      }
+    }
+
+    // The same milestone from the same person within a day is one event.
+    const repeat = await GroupFeedEvent.findOne({
+      group_id: group._id,
+      user_id: req.user._id,
+      event_type,
+      'data.title': safeData.title || null,
+      created_at: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+    });
+    if (repeat) {
+      return res.status(200).json({ success: true, posted: false, reason: 'Already shared today' });
     }
 
     const event = await GroupFeedEvent.create({
@@ -573,6 +588,8 @@ async function getFamilyPrayerLog(req, res, next) {
     const endDate = week_end > today ? today : week_end;
     const startDate = req.query.start_date || week_start;
     const finalEndDate = req.query.end_date || endDate;
+    // A week of detail is the design; allow up to a month, never unlimited history.
+    assertDateRange(startDate, finalEndDate, 31);
 
     const members = await User.find({ _id: { $in: group.users } }).select('name settings');
     const opted = members.filter((m) => sharesFamilyDetail(m, group._id, 'prayers'));

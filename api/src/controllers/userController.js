@@ -1,4 +1,5 @@
 const { User } = require('../models');
+const { FORBIDDEN_SEGMENTS } = require('../utils/inputGuard');
 
 // FR: Personal Cycle Mode must default OFF and never be assumed from gender.
 // quran_during_menstruation follows the FR's 3-way Qur'an preference:
@@ -12,6 +13,7 @@ const DEFAULT_FEMALE_SETTINGS = {
 function deepMerge(target, source) {
   const result = { ...target };
   for (const key of Object.keys(source)) {
+    if (FORBIDDEN_SEGMENTS.has(key)) continue;
     if (
       source[key] !== null &&
       typeof source[key] === 'object' &&
@@ -29,9 +31,13 @@ function deepMerge(target, source) {
 }
 
 function deleteByDotPath(obj, dotPath) {
+  if (typeof dotPath !== 'string') return;
   const parts = dotPath.split('.');
+  // Never walk into or delete from the prototype chain.
+  if (parts.some((p) => FORBIDDEN_SEGMENTS.has(p))) return;
   let current = obj;
   for (let i = 0; i < parts.length - 1; i++) {
+    if (!Object.prototype.hasOwnProperty.call(current, parts[i])) return;
     if (current[parts[i]] === undefined || current[parts[i]] === null) return;
     current = current[parts[i]];
   }

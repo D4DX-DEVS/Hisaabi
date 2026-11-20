@@ -1,6 +1,31 @@
 const { v4: uuidv4 } = require('uuid');
 const { User, QuranReading, DhikrTracking, PrayerTracking, QuranMemorization } = require('../models');
 const { getCurrentDate, getDaysBetweenDates, getMonthDateRange } = require('../utils/dateUtils');
+const { InputError } = require('../utils/inputGuard');
+const surahInfo = require('../data/quran-surah-info.json');
+
+const AYAHS_IN_SURAH = {};
+for (const s of surahInfo) AYAHS_IN_SURAH[s.surah_number] = s.total_ayahs;
+
+/** Whole numbers only, and the ayahs must exist in that surah. */
+function validateMemorizationRange(surah, from, to) {
+  const isInt = (n) => Number.isInteger(n);
+  if (!isInt(surah) || !AYAHS_IN_SURAH[surah]) throw new InputError('surah_number must be a surah from 1 to 114');
+  if (!isInt(from) || !isInt(to) || from < 1 || to < from || to > AYAHS_IN_SURAH[surah]) {
+    throw new InputError(`Ayahs must be whole numbers within this surah (1 to ${AYAHS_IN_SURAH[surah]}), from_ayah no later than to_ayah`);
+  }
+}
+
+function validDeadline(value) {
+  const d = new Date(value);
+  if (typeof value !== 'string' || Number.isNaN(d.getTime())) throw new InputError('deadline must be a valid date');
+  return d.toISOString();
+}
+
+/** The last ayah to count: never past the end of the surah, whatever was stored. */
+function lastAyah(goal) {
+  return Math.min(Number(goal.to_ayah) || 0, AYAHS_IN_SURAH[goal.surah_number] || 0);
+}
 
 // ── Goal Settings ────────────────────────────────────────────────────
 
@@ -195,9 +220,8 @@ async function createMemorizationGoal(req, res, next) {
     if (!surah_number || !from_ayah || !to_ayah || !deadline) {
       return res.status(400).json({ error: 'surah_number, from_ayah, to_ayah, and deadline are required' });
     }
-    if (from_ayah > to_ayah) {
-      return res.status(400).json({ error: 'from_ayah cannot be greater than to_ayah' });
-    }
+    validateMemorizationRange(surah_number, from_ayah, to_ayah);
+    const deadlineIso = validDeadline(deadline);
 
     const { QuranMemorization } = require('../models');
     let record = await QuranMemorization.findOne({ user_id: userId });
@@ -208,7 +232,7 @@ async function createMemorizationGoal(req, res, next) {
       surah_number,
       from_ayah,
       to_ayah,
-      deadline: new Date(deadline).toISOString(),
+      deadline: deadlineIso,
       created_at: new Date().toISOString(),
       completed: false,
     };
@@ -240,8 +264,9 @@ async function updateMemorizationGoal(req, res, next) {
     if (surah_number !== undefined) updated.surah_number = surah_number;
     if (from_ayah !== undefined) updated.from_ayah = from_ayah;
     if (to_ayah !== undefined) updated.to_ayah = to_ayah;
-    if (deadline !== undefined) updated.deadline = new Date(deadline).toISOString();
-    if (completed !== undefined) updated.completed = completed;
+    validateMemorizationRange(updated.surah_number, updated.from_ayah, updated.to_ayah);
+    if (deadline !== undefined) updated.deadline = validDeadline(deadline);
+    if (completed !== undefined) updated.completed = completed === true;
 
     record.memorization_goals[idx] = updated;
     record.markModified('memorization_goals');
@@ -288,7 +313,7 @@ async function getMemorizationProgress(req, res, next) {
     const progress = record.memorization_goals.map((g) => {
       const total_ayahs = g.to_ayah - g.from_ayah + 1;
       let memorized_count = 0;
-      for (let a = g.from_ayah; a <= g.to_ayah; a++) {
+      for (let a = g.from_ayah; a <= lastAyah(g); a++) {
         if (memorizedKeys.has(`${g.surah_number}:${a}`)) memorized_count++;
       }
       const percentage_completed = total_ayahs > 0 ? Math.round((memorized_count / total_ayahs) * 100) : 0;
@@ -361,7 +386,7 @@ async function getMemorizationProgressCalendar(req, res, next) {
         const total_ayahs = g.to_ayah - g.from_ayah + 1;
         let memorized_count = 0;
         let completed_today = 0;
-        for (let a = g.from_ayah; a <= g.to_ayah; a++) {
+        for (let a = g.from_ayah; a <= lastAyah(g); a++) {
           const key = `${g.surah_number}:${a}`;
           if (memorizedUpToDay.has(key)) memorized_count++;
           if (memorizedOnDay.has(key)) completed_today++;

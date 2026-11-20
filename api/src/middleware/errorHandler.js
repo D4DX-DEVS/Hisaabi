@@ -1,5 +1,11 @@
 // eslint-disable-next-line no-unused-vars
 function errorHandler(err, req, res, next) {
+  // A request the client got wrong (bad dates, range too long, ...): a 400,
+  // not worth a stack trace in the logs.
+  if (err.name === 'InputError') {
+    return res.status(400).json({ error: err.message });
+  }
+
   console.error('Error:', err);
 
   // Mongoose validation error
