@@ -38,8 +38,21 @@ function emailFor(group, viewerId, user) {
   return isGroupAdmin(group, viewerId) ? user.email : undefined;
 }
 
+/** When this person joined the group, or undefined if it was never recorded. */
+function joinedAtFor(group, user) {
+  const id = user._id.toString();
+  if (group.admin_id.toString() === id) return group.created_at;
+  const joined = group.member_joined_at;
+  return joined && typeof joined === 'object' ? joined[id] : undefined;
+}
+
 function publicUser(group, viewerId, user) {
-  return { id: user._id, name: user.name, email: emailFor(group, viewerId, user) };
+  return {
+    id: user._id,
+    name: user.name,
+    email: emailFor(group, viewerId, user),
+    joined_at: joinedAtFor(group, user),
+  };
 }
 
 function formatGroup(group, adminUser, currentUserId) {
@@ -107,6 +120,8 @@ async function joinGroupByCode(req, res, next) {
     if (isMember) return res.status(400).json({ error: 'You are already a member of this group' });
 
     group.users.push(userId);
+    group.member_joined_at = { ...(group.member_joined_at || {}), [userId.toString()]: new Date().toISOString() };
+    group.markModified('member_joined_at');
     await group.save();
 
     const admin = await User.findById(group.admin_id);

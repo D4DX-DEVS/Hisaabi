@@ -1,6 +1,17 @@
 const { QuranReading, QuranProgress, QuranMemorization, ActivityLog } = require('../models');
 const { queueStreakUpdate } = require('../services/streakQueueService');
-const { getCurrentDate } = require('../utils/dateUtils');
+const { getCurrentDate, formatDate } = require('../utils/dateUtils');
+
+/**
+ * The latest day a client may log for: the server's today plus one. Someone
+ * whose clock is ahead of the server's (India at 2 am on a UTC server) was told
+ * today was "in the future" and could not log anything until the server caught up.
+ */
+function latestAllowedDate() {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  return formatDate(d);
+}
 const surahInfo = require('../data/quran-surah-info.json');
 
 const TOTAL_PAGES = 604;
@@ -167,7 +178,7 @@ async function logRecitation(req, res, next) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) {
       return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
     }
-    if (targetDate > getCurrentDate()) {
+    if (targetDate > latestAllowedDate()) {
       return res.status(400).json({ error: 'Cannot log recitation for a future date' });
     }
 
@@ -232,7 +243,7 @@ async function setListened(req, res, next) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) {
       return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
     }
-    if (targetDate > today) {
+    if (targetDate > latestAllowedDate()) {
       return res.status(400).json({ error: 'Cannot mark listening for a future date' });
     }
 

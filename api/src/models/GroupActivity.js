@@ -22,4 +22,6 @@ const groupActivitySchema = new mongoose.Schema(
   }
 );
 
+groupActivitySchema.index({ group_id: 1 });
+
 module.exports = mongoose.model('GroupActivity', groupActivitySchema);
