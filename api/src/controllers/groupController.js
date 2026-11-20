@@ -294,8 +294,9 @@ async function transferAdmin(req, res, next) {
     const group = await Group.findOne({ group_id });
     if (!group) return res.status(404).json({ error: 'Group not found' });
 
-    if (!isGroupAdmin(group, userId)) {
-      return res.status(403).json({ error: 'Only group admin can grant admin privileges' });
+    // The owner grants and revokes admin rights; a co-admin cannot promote others.
+    if (group.admin_id.toString() !== userId.toString()) {
+      return res.status(403).json({ error: 'Only the group owner can grant admin privileges' });
     }
 
     if (new_admin_id === userId.toString()) {

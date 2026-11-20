@@ -53,4 +53,17 @@ function getMonthDateRange(year, month) {
   return { start_date, end_date };
 }
 
-module.exports = { formatDate, getCurrentDate, isDateInRange, getDaysBetweenDates, getMonthDateRange };
+/**
+ * The latest day a client may log for: the server's today plus one. Someone whose
+ * clock is ahead of the server's (India at 2 am on a UTC server) must not be told
+ * that today is "in the future".
+ */
+function latestAllowedDate() {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  return formatDate(d);
+}
+
+module.exports = {
+  formatDate, getCurrentDate, isDateInRange, getDaysBetweenDates, getMonthDateRange, latestAllowedDate,
+};

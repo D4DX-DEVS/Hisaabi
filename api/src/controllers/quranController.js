@@ -1,16 +1,21 @@
 const { QuranReading, QuranProgress, QuranMemorization, ActivityLog } = require('../models');
 const { queueStreakUpdate } = require('../services/streakQueueService');
-const { getCurrentDate, formatDate } = require('../utils/dateUtils');
+const { getCurrentDate, latestAllowedDate } = require('../utils/dateUtils');
+const { dayInZone } = require('../utils/activityPeriod');
 
 /**
- * The latest day a client may log for: the server's today plus one. Someone
- * whose clock is ahead of the server's (India at 2 am on a UTC server) was told
- * today was "in the future" and could not log anything until the server caught up.
+ * Which readings count toward the current khatm: only days strictly after the
+ * day of the last reset, in the reader's own timezone. Counting the reset day
+ * itself meant pages already counted in the finished khatm counted again, so
+ * pressing reset twice in a day added a second khatm.
  */
-function latestAllowedDate() {
-  const d = new Date();
-  d.setDate(d.getDate() + 1);
-  return formatDate(d);
+function sinceLastReset(user, lastResetDate) {
+  const query = { user_id: user._id };
+  if (lastResetDate) {
+    const zone = user.settings && user.settings.other_settings && user.settings.other_settings.timezone;
+    query.date = { $gt: dayInZone(zone, new Date(lastResetDate)) };
+  }
+  return query;
 }
 const surahInfo = require('../data/quran-surah-info.json');
 
@@ -300,10 +305,7 @@ async function handleReadingProgress(req, res, next) {
     if (!progress) progress = await QuranProgress.create({ user_id: userId });
 
     if (action === 'check_completion') {
-      const query = { user_id: userId };
-      if (progress.last_reset_date) {
-        query.date = { $gte: new Date(progress.last_reset_date).toISOString().split('T')[0] };
-      }
+      const query = sinceLastReset(req.user, progress.last_reset_date);
       const records = await QuranReading.find(query);
       const allPages = new Set();
       for (const r of records) r.pages_read.forEach((p) => allPages.add(p));
@@ -321,10 +323,7 @@ async function handleReadingProgress(req, res, next) {
         remaining_pages_count: remaining_pages.length,
       });
     } else if (action === 'reset') {
-      const query = { user_id: userId };
-      if (progress.last_reset_date) {
-        query.date = { $gte: new Date(progress.last_reset_date).toISOString().split('T')[0] };
-      }
+      const query = sinceLastReset(req.user, progress.last_reset_date);
       const records = await QuranReading.find(query);
       const allPages = new Set();
       for (const r of records) r.pages_read.forEach((p) => allPages.add(p));
