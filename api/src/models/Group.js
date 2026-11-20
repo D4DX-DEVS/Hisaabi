@@ -13,6 +13,10 @@ const groupSchema = new mongoose.Schema(
       default: 'custom',
     },
     description: { type: String, default: '' },
+    // When each member joined, keyed by user id (ISO date). The group's owner
+    // joined when it was created. Members who joined before this was recorded
+    // have no entry, and the app shows no date for them.
+    member_joined_at: { type: mongoose.Schema.Types.Mixed, default: {} },
   },
   {
     timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },
@@ -25,5 +29,8 @@ groupSchema.pre('deleteOne', { document: true, query: false }, async function (n
   await require('../services/groupCleanup').deleteGroupData(this._id);
   next();
 });
+
+groupSchema.index({ users: 1 });
+groupSchema.index({ admin_id: 1 });
 
 module.exports = mongoose.model('Group', groupSchema);

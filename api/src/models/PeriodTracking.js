@@ -36,4 +36,6 @@ const periodTrackingSchema = new mongoose.Schema(
   }
 );
 
+periodTrackingSchema.index({ user_id: 1, start_date: 1, end_date: 1 });
+
 module.exports = mongoose.model('PeriodTracking', periodTrackingSchema);

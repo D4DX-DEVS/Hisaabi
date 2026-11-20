@@ -1,7 +1,7 @@
 const { GroupActivity, GroupFeedEvent, Group, User } = require('../models');
 const { emitFeedEvent, notifyGroupMember } = require('./groupChallengeController');
 const ExcelJS = require('exceljs');
-const { periodKey, resolveDay, statusesForPeriod, recentHistory } = require('../utils/activityPeriod');
+const { periodKey, resolveDay, statusesForPeriod, recentHistory, pruneStatuses } = require('../utils/activityPeriod');
 const { sortActivities } = require('../utils/activityOrder');
 const { sameName } = require('../utils/duplicateGuard');
 
@@ -195,7 +195,7 @@ async function updateMyActivityStatus(req, res, next) {
       userStatuses.push(updatedStatus);
     }
 
-    activity.user_status = userStatuses;
+    activity.user_status = pruneStatuses(userStatuses, day);
     activity.markModified('user_status');
     await activity.save();
 
@@ -445,7 +445,7 @@ async function exportGroupActivities(req, res, next) {
     summarySheet.addRow({ field: 'Admin', value: adminName });
     summarySheet.addRow({ field: 'Total Members', value: group.users.length });
     summarySheet.addRow({ field: 'Total Activities', value: activities.length });
-    summarySheet.addRow({ field: 'Created At', value: group.createdAt ? new Date(group.createdAt).toLocaleDateString() : '' });
+    summarySheet.addRow({ field: 'Created At', value: group.created_at ? new Date(group.created_at).toLocaleDateString() : '' });
     summarySheet.addRow({ field: 'Export Date', value: new Date().toLocaleString() });
 
     // --- Sheet 2: Activity Log (detailed) ---

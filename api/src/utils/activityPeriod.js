@@ -95,4 +95,21 @@ function recentHistory(entries, userId, activityType, day, zone) {
   return out;
 }
 
-module.exports = { dayInZone, periodKey, resolveDay, entryPeriod, statusesForPeriod, recentHistory };
+/**
+ * Drops statuses older than `keepDays` so one activity's list cannot grow for
+ * ever (a daily activity with 50 members added about 18,000 entries a year, all
+ * scanned on every request). Entries with no period (older data) are kept.
+ */
+function pruneStatuses(entries, day, keepDays = 400) {
+  const cutoff = new Date(`${day}T00:00:00Z`);
+  cutoff.setUTCDate(cutoff.getUTCDate() - keepDays);
+  const limit = cutoff.toISOString().slice(0, 10);
+  return (entries || []).filter((e) => {
+    if (!e || !e.period) return true;
+    const rest = String(e.period).slice(2);
+    const date = rest.length === 7 ? `${rest}-01` : rest;
+    return date >= limit;
+  });
+}
+
+module.exports = { dayInZone, periodKey, resolveDay, entryPeriod, statusesForPeriod, recentHistory, pruneStatuses };

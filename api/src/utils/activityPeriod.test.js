@@ -1,6 +1,6 @@
 // Run with: node src/utils/activityPeriod.test.js
 const assert = require('assert');
-const { periodKey, resolveDay, entryPeriod, statusesForPeriod, dayInZone, recentHistory } = require('./activityPeriod');
+const { periodKey, resolveDay, entryPeriod, statusesForPeriod, dayInZone, recentHistory, pruneStatuses } = require('./activityPeriod');
 
 // Keys: day, Monday-start week, month; recurring behaves like daily.
 assert.strictEqual(periodKey('daily', '2026-11-10'), 'd:2026-11-10');
@@ -51,5 +51,20 @@ assert.deepStrictEqual(wk.map((h) => h.period), ['w:2026-10-19', 'w:2026-10-26',
 assert.deepStrictEqual(wk.map((h) => h.done), [false, false, true, false]);
 const mo = recentHistory([], 'a', 'monthly', '2026-11-13', 'Asia/Kolkata');
 assert.deepStrictEqual(mo.map((h) => h.period), ['m:2026-08', 'm:2026-09', 'm:2026-10', 'm:2026-11']);
+
+// Pruning: old periods go, recent and period-less entries stay.
+const pruned = pruneStatuses(
+  [
+    { user: 'a', status: 'completed', period: 'd:2024-01-01' },
+    { user: 'a', status: 'completed', period: 'w:2024-01-01' },
+    { user: 'a', status: 'completed', period: 'm:2024-01' },
+    { user: 'a', status: 'completed', period: 'd:2026-11-12' },
+    { user: 'a', status: 'completed', period: 'm:2026-10' },
+    { user: 'a', status: 'completed' },
+  ],
+  '2026-11-13'
+);
+assert.deepStrictEqual(pruned.map((e) => e.period), ['d:2026-11-12', 'm:2026-10', undefined]);
+assert.strictEqual(pruneStatuses(null, '2026-11-13').length, 0);
 
 console.log('activityPeriod: all checks passed');
