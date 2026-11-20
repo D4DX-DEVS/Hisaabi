@@ -49,6 +49,7 @@ userSchema.pre('deleteOne', { document: true, query: false }, async function (ne
     'ActivityLog', 'DhikrTracking', 'DuaMemorization', 'FastingDay',
     'PeriodTracking', 'PrayerTracking', 'QuranMemorization', 'QuranProgress',
     'QuranReading', 'Streak',
+    'Muhasabah', 'GoodDeedLog', 'WorshipGoal', 'AdhkarTracking', 'DuaTracking',
   ];
   await Promise.all(
     relatedModels
@@ -58,13 +59,16 @@ userSchema.pre('deleteOne', { document: true, query: false }, async function (ne
   // Handle Group separately — delete groups where user is admin, remove from members
   if (models.includes('Group')) {
     const Group = mongoose.model('Group');
+    const { removeMemberData, deleteGroupData } = require('../services/groupCleanup');
     const adminGroups = await Group.find({ admin_id: userId });
-    if (adminGroups.length) {
-      const groupIds = adminGroups.map((g) => g._id);
-      if (models.includes('GroupActivity')) {
-        await mongoose.model('GroupActivity').deleteMany({ group_id: { $in: groupIds } });
-      }
-      await Group.deleteMany({ admin_id: userId });
+    const memberGroups = await Group.find({ users: userId, admin_id: { $ne: userId } }).select('_id');
+    // Groups they own go with everything inside them (challenges, goals, feed, reminders).
+    for (const g of adminGroups) await deleteGroupData(g._id);
+    if (adminGroups.length) await Group.deleteMany({ admin_id: userId });
+    // Groups they only belong to keep going, minus this person's numbers.
+    for (const g of memberGroups) await removeMemberData(g._id, userId);
+    if (models.includes('GroupReminder')) {
+      await mongoose.model('GroupReminder').deleteMany({ created_by: userId });
     }
     // Remove user from members and co-admins in groups they belong to
     await Group.updateMany(

@@ -20,11 +20,9 @@ const groupSchema = new mongoose.Schema(
   }
 );
 
-// Cascade delete group activities when group is deleted
+// Cascade delete everything inside a group when the group is deleted
 groupSchema.pre('deleteOne', { document: true, query: false }, async function (next) {
-  if (mongoose.modelNames().includes('GroupActivity')) {
-    await mongoose.model('GroupActivity').deleteMany({ group_id: this._id });
-  }
+  await require('../services/groupCleanup').deleteGroupData(this._id);
   next();
 });
 

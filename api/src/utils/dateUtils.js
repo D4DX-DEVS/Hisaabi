@@ -27,6 +27,12 @@ function isDateInRange(date, start, end) {
  * Get an array of YYYY-MM-DD strings for every day from startDate to endDate (inclusive)
  */
 function getDaysBetweenDates(startDate, endDate) {
+  // Dates must be real YYYY-MM-DD days and the range at most MAX_RANGE_DAYS,
+  // so one request (or one bad stored value) cannot loop for millions of days.
+  const { assertDateRange } = require('./inputGuard');
+  startDate = typeof startDate === 'string' ? startDate.slice(0, 10) : startDate;
+  endDate = typeof endDate === 'string' ? endDate.slice(0, 10) : endDate;
+  assertDateRange(startDate, endDate);
   const days = [];
   const current = new Date(startDate);
   const end = new Date(endDate);

@@ -1,5 +1,9 @@
 const { PeriodTracking } = require('../models');
 const { encryptField, decryptField } = require('../services/fieldEncryption');
+const { assertDateRange } = require('../utils/inputGuard');
+
+/** A cycle is days, not months: real dates and at most this many days. */
+const MAX_PERIOD_DAYS = 90;
 
 /**
  * Resolve the moment a cycle starts or ends.
@@ -97,6 +101,7 @@ async function addPeriod(req, res, next) {
     if (!start_date || !end_date) {
       return res.status(400).json({ error: 'start_date and end_date are required' });
     }
+    assertDateRange(start_date, end_date, MAX_PERIOD_DAYS);
     if (start_date > end_date) {
       return res.status(400).json({ error: 'start_date cannot be after end_date' });
     }
@@ -149,6 +154,7 @@ async function updatePeriod(req, res, next) {
 
     const newStart = start_date || record.start_date;
     const newEnd = end_date || record.end_date;
+    assertDateRange(newStart, newEnd, MAX_PERIOD_DAYS);
 
     if (newStart > newEnd) {
       return res.status(400).json({ error: 'start_date cannot be after end_date' });

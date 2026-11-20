@@ -64,6 +64,8 @@ app.use(
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+// Reject bodies/queries carrying $operators or __proto__ keys (NoSQL injection).
+app.use(require('./utils/inputGuard').rejectUnsafeKeys);
 
 // ── Static uploads ────────────────────────────────────────────────────
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
