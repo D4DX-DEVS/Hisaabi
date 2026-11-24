@@ -177,27 +177,40 @@ async function updateMyActivityStatus(req, res, next) {
     const isMember = group.users.some((u) => u.toString() === userId.toString());
     if (!isMember) return res.status(403).json({ error: 'You are not a member of this group' });
 
-    const userStatuses = activity.user_status || [];
     const { day, zone } = callerDay(req, date);
     const period = periodKey(activity.activity_type, day);
-    // This member's entry for the current period only; earlier periods are history.
-    const idx = userStatuses.findIndex(
-      (s) => s.user && s.user.toString() === userId.toString()
-        && statusesForPeriod([s], activity.activity_type, day, zone).length === 1
-    );
+    let wasCompleted = false;
+    // Compare-and-swap on __v: if another member saved in between, reload and
+    // redo, so two members tapping at once both keep their status.
+    let saved = false;
+    for (let attempt = 0; attempt < 5 && !saved; attempt++) {
+      const current = attempt === 0 ? activity : await GroupActivity.findById(activityId);
+      if (!current) return res.status(404).json({ error: 'Activity not found' });
+      const userStatuses = [...(current.user_status || [])];
+      // This member's entry for the current period only; earlier periods are history.
+      const idx = userStatuses.findIndex(
+        (s) => s.user && s.user.toString() === userId.toString()
+          && statusesForPeriod([s], current.activity_type, day, zone).length === 1
+      );
+      wasCompleted = idx !== -1 && userStatuses[idx].status === 'completed';
 
-    const wasCompleted = idx !== -1 && userStatuses[idx].status === 'completed';
-
-    const updatedStatus = { user: userId, status, period, updatedAt: new Date().toISOString() };
-    if (idx !== -1) {
-      userStatuses[idx] = updatedStatus;
-    } else {
-      userStatuses.push(updatedStatus);
+      const updatedStatus = { user: userId, status, period, updatedAt: new Date().toISOString() };
+      if (idx !== -1) {
+        userStatuses[idx] = updatedStatus;
+      } else {
+        userStatuses.push(updatedStatus);
+      }
+      const next = pruneStatuses(userStatuses, day);
+      const result = await GroupActivity.updateOne(
+        { _id: activityId, __v: current.__v },
+        { $set: { user_status: next }, $inc: { __v: 1 } }
+      );
+      if (result.modifiedCount === 1) {
+        activity.user_status = next;
+        saved = true;
+      }
     }
-
-    activity.user_status = pruneStatuses(userStatuses, day);
-    activity.markModified('user_status');
-    await activity.save();
+    if (!saved) return res.status(409).json({ error: 'Busy, please try again.' });
 
     // Share the completion to the group's feed ("Fathima completed
     // "Morning Adhkar"."). Only on the move into completed, and once per

@@ -418,8 +418,13 @@ async function reportChallengeProgress(req, res, next) {
       participant.completed_at = new Date();
     }
 
-    challenge.markModified('participants');
-    await challenge.save();
+    const swapped = await GroupChallenge.updateOne(
+      { _id: challenge._id, __v: challenge.__v },
+      { $set: { participants: challenge.participants }, $inc: { __v: 1 } }
+    );
+    if (swapped.modifiedCount !== 1) {
+      return res.status(409).json({ error: 'Someone else just updated this challenge. Please try again.' });
+    }
 
     if (justCompleted) {
       await emitFeedEvent(group._id, req.user, 'challenge_completed', { title: challenge.name });

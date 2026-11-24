@@ -1,6 +1,7 @@
 const { DhikrTracking, ActivityLog, DhikrType } = require('../models');
 const { queueStreakUpdate } = require('../services/streakQueueService');
 const { getCurrentDate } = require('../utils/dateUtils');
+const { isYmd } = require('../utils/inputGuard');
 
 async function getDhikrTracking(req, res, next) {
   try {
@@ -27,25 +28,28 @@ async function updateDhikrCount(req, res, next) {
       return res.status(400).json({ error: 'dhikr_counts object is required' });
     }
 
+    if (!isYmd(targetDate)) return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+    const inc = {};
     for (const [key, val] of Object.entries(dhikr_counts)) {
-      if (typeof val !== 'number' || val <= 0) {
+      if (!/^[^.$\u0000]{1,80}$/.test(key) || key === '__proto__') {
+        return res.status(400).json({ error: `Invalid dhikr name "${String(key).slice(0, 30)}"` });
+      }
+      if (typeof val !== 'number' || !Number.isFinite(val) || val <= 0) {
         return res.status(400).json({ error: `Count for "${key}" must be a positive integer` });
       }
+      inc[`dhikr_counts.${key}`] = val;
     }
 
-    let record = await DhikrTracking.findOne({ user_id: userId, date: targetDate });
-    if (!record) {
-      record = new DhikrTracking({ user_id: userId, date: targetDate, dhikr_counts: {} });
+    // Atomic add: two counts at once both land; a racing first insert retries as an update.
+    const filter = { user_id: userId, date: targetDate };
+    const opts = { upsert: true, new: true };
+    let record;
+    try {
+      record = await DhikrTracking.findOneAndUpdate(filter, { $inc: inc }, opts);
+    } catch (err) {
+      if (err && err.code !== 11000) throw err;
+      record = await DhikrTracking.findOneAndUpdate(filter, { $inc: inc }, opts);
     }
-
-    const existing = record.dhikr_counts ? { ...record.dhikr_counts } : {};
-    for (const [key, val] of Object.entries(dhikr_counts)) {
-      existing[key] = (existing[key] || 0) + val;
-    }
-
-    record.dhikr_counts = existing;
-    record.markModified('dhikr_counts');
-    await record.save();
 
     // Log each dhikr type
     const logPromises = Object.entries(dhikr_counts).map(([dhikr_type, count]) =>
