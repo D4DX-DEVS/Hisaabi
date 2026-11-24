@@ -180,6 +180,7 @@ async function updateMyActivityStatus(req, res, next) {
     const { day, zone } = callerDay(req, date);
     const period = periodKey(activity.activity_type, day);
     let wasCompleted = false;
+    let updatedStatus = null;
     // Compare-and-swap on __v: if another member saved in between, reload and
     // redo, so two members tapping at once both keep their status.
     let saved = false;
@@ -194,7 +195,7 @@ async function updateMyActivityStatus(req, res, next) {
       );
       wasCompleted = idx !== -1 && userStatuses[idx].status === 'completed';
 
-      const updatedStatus = { user: userId, status, period, updatedAt: new Date().toISOString() };
+      updatedStatus = { user: userId, status, period, updatedAt: new Date().toISOString() };
       if (idx !== -1) {
         userStatuses[idx] = updatedStatus;
       } else {
