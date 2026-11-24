@@ -1,7 +1,7 @@
-const { GroupActivity, GroupFeedEvent, Group, User } = require('../models');
+const { GroupActivity, GroupChallenge, GroupGoal, GroupFeedEvent, Group, User } = require('../models');
 const { emitFeedEvent, notifyGroupMember } = require('./groupChallengeController');
 const ExcelJS = require('exceljs');
-const { periodKey, resolveDay, statusesForPeriod, recentHistory, pruneStatuses } = require('../utils/activityPeriod');
+const { periodKey, resolveDay, entryPeriod, statusesForPeriod, recentHistory, pruneStatuses } = require('../utils/activityPeriod');
 const { sortActivities } = require('../utils/activityOrder');
 const { sameName } = require('../utils/duplicateGuard');
 
@@ -467,18 +467,22 @@ async function exportGroupActivities(req, res, next) {
       { header: 'Activity Name', key: 'activity_name', width: 25 },
       { header: 'Type', key: 'activity_type', width: 12 },
       { header: 'Date', key: 'date', width: 15 },
+      { header: 'Period', key: 'period', width: 14 },
       { header: 'Member Name', key: 'member_name', width: 20 },
       { header: 'Status', key: 'status', width: 15 },
       { header: 'Updated At', key: 'updated_at', width: 22 },
     ];
     logSheet.getRow(1).font = { bold: true };
 
-    for (const activity of activities) {
+    // Every stored response, not only the current period's: an activity done
+    // yesterday or last week belongs in the log too.
+    for (const activity of rawActivities) {
       for (const us of (activity.user_status || [])) {
         logSheet.addRow({
           activity_name: activity.activity_name,
           activity_type: activity.activity_type,
           date: activity.date ? new Date(activity.date).toLocaleDateString() : '',
+          period: String(entryPeriod(us, activity.activity_type, exportZone) || '').slice(2),
           member_name: memberMap[us.user?.toString()] || 'Unknown',
           status: us.status || 'Not responded',
           updated_at: us.updatedAt ? new Date(us.updatedAt).toLocaleString() : '',
@@ -573,6 +577,78 @@ async function exportGroupActivities(req, res, next) {
         pending,
         not_responded: notResponded,
         completion_rate: rate,
+      });
+    }
+
+    // --- Sheets 5-7: what the group screens also show --------------------
+    // Challenges, group goals and the feed are on screen next to the activity
+    // list, so an export without them looks empty. Goals list only their
+    // definition: how much each member added stays with the member.
+    const [challenges, goals, feed] = await Promise.all([
+      GroupChallenge.find({ group_id: groupId, archived: { $ne: true } }).sort({ start_date: -1 }),
+      GroupGoal.find({ group_id: groupId, archived: { $ne: true } }).sort({ start_date: -1 }),
+      GroupFeedEvent.find({ group_id: groupId }).sort({ created_at: -1 }).limit(500),
+    ]);
+
+    const challengeSheet = workbook.addWorksheet('Challenges');
+    challengeSheet.columns = [
+      { header: 'Challenge', key: 'name', width: 28 },
+      { header: 'Tracks', key: 'metric', width: 18 },
+      { header: 'Target per person', key: 'target', width: 18 },
+      { header: 'Starts', key: 'start', width: 14 },
+      { header: 'Ends', key: 'end', width: 14 },
+      { header: 'Joined', key: 'joined', width: 10 },
+      { header: 'Completed', key: 'completed', width: 12 },
+    ];
+    challengeSheet.getRow(1).font = { bold: true };
+    for (const c of challenges) {
+      challengeSheet.addRow({
+        name: c.name,
+        metric: c.metric,
+        target: c.target,
+        start: c.start_date,
+        end: c.end_date,
+        joined: (c.participants || []).length,
+        completed: (c.participants || []).filter((x) => x.completed).length,
+      });
+    }
+
+    const goalSheet = workbook.addWorksheet('Group Goals');
+    goalSheet.columns = [
+      { header: 'Goal', key: 'title', width: 28 },
+      { header: 'Tracks', key: 'metric', width: 18 },
+      { header: 'Group target', key: 'target', width: 14 },
+      { header: 'Period', key: 'period', width: 12 },
+      { header: 'Starts', key: 'start', width: 14 },
+      { header: 'Ends', key: 'end', width: 14 },
+    ];
+    goalSheet.getRow(1).font = { bold: true };
+    for (const g of goals) {
+      goalSheet.addRow({
+        title: g.title,
+        metric: g.metric,
+        target: g.target,
+        period: g.period,
+        start: g.start_date,
+        end: g.end_date,
+      });
+    }
+
+    const feedSheet = workbook.addWorksheet('Activity Feed');
+    feedSheet.columns = [
+      { header: 'When', key: 'when', width: 22 },
+      { header: 'Member', key: 'member', width: 22 },
+      { header: 'Event', key: 'event', width: 22 },
+      { header: 'Detail', key: 'detail', width: 36 },
+    ];
+    feedSheet.getRow(1).font = { bold: true };
+    for (const e of feed) {
+      const d = e.data && typeof e.data === 'object' ? e.data : {};
+      feedSheet.addRow({
+        when: e.created_at ? new Date(e.created_at).toLocaleString() : '',
+        member: memberMap[e.user_id?.toString()] || 'Former member',
+        event: e.event_type,
+        detail: String(d.title || d.name || d.activity_name || '').slice(0, 200),
       });
     }
 
