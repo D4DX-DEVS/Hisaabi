@@ -1,3 +1,4 @@
+const { cycleModeOn } = require('../utils/cycleMode');
 const { PeriodTracking } = require('../models');
 const { encryptField, decryptField } = require('../services/fieldEncryption');
 const { assertDateRange } = require('../utils/inputGuard');
@@ -63,16 +64,11 @@ function serialize(record) {
 }
 
 /**
- * Gate on the user's own opt-in, not on gender. The FR is explicit that
- * Personal Cycle Mode must never assume or infer who it's for — gender is
- * only ever known once a user fills in their profile, and gating here on
- * it meant a brand-new account (gender unset by default) could flip the
- * "Enable Personal Cycle Mode" toggle in Settings and have every actual
- * period endpoint keep rejecting her anyway. The toggle itself is now the
- * real gate, exactly matching the FR's own Step 1 -> Step 2 flow.
+ * On by default for women (see utils/cycleMode.js); a woman can switch it off
+ * in Settings and anyone else can switch it on. The stored choice always wins.
  */
 function requirePeriodTrackingEnabled(req, res) {
-  const enabled = req.user.settings?.female_settings?.period_tracking === true;
+  const enabled = cycleModeOn(req.user);
   if (!enabled) {
     res.status(403).json({ error: 'Enable Personal Cycle Mode in Settings first' });
     return false;
