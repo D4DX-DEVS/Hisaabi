@@ -1,3 +1,4 @@
+const { cycleModeOn } = require('../utils/cycleMode');
 const {
   PrayerTracking,
   QuranReading,
@@ -25,10 +26,10 @@ async function getTodayProgress(req, res, next) {
       getAllStreaks(userId),
     ]);
 
-    // Check if today is a period day — gated on the feature being enabled,
-    // not on gender, same as everywhere else this is checked.
+    // Check if today is a period day — gated on the feature being on
+    // (default on for women), same as everywhere else this is checked.
     let is_period = false;
-    if (req.user.settings?.female_settings?.period_tracking === true) {
+    if (cycleModeOn(req.user)) {
       const periodRecord = await PeriodTracking.findOne({
         user_id: userId,
         start_date: { $lte: date },

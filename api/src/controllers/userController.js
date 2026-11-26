@@ -1,11 +1,11 @@
 const { User } = require('../models');
 const { FORBIDDEN_SEGMENTS } = require('../utils/inputGuard');
 
-// FR: Personal Cycle Mode must default OFF and never be assumed from gender.
+// Personal Cycle Mode is on by default for women and can be switched off.
 // quran_during_menstruation follows the FR's 3-way Qur'an preference:
 // 'memory_or_device' | 'listen_only' | 'hide_prompts'.
 const DEFAULT_FEMALE_SETTINGS = {
-  period_tracking: false,
+  period_tracking: true,
   maintain_streaks_during_period: true,
   quran_during_menstruation: 'memory_or_device',
 };

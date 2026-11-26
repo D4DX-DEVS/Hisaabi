@@ -10,6 +10,7 @@ const {
   DuaTracking,
   GoodDeedLog,
 } = require('../models');
+const { keepStreaksDuringCycle } = require('../utils/cycleMode');
 const { getCurrentDate, getDaysBetweenDates } = require('../utils/dateUtils');
 const { prayerLocation, exemptPrayersOn } = require('./prayerTimes');
 
@@ -41,8 +42,7 @@ async function getExemptPrayers(userId, startDate, endDate) {
   // turned this on and recorded a cycle gets the exemption regardless of
   // what her profile's gender says, or whether it's set at all.
   const exemptionEnabled =
-    user && user.settings && user.settings.female_settings &&
-    user.settings.female_settings.maintain_streaks_during_period === true;
+    keepStreaksDuringCycle(user);
 
   const byDay = new Map();
   if (!exemptionEnabled) return byDay;

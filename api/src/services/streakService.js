@@ -1,3 +1,4 @@
+const { keepStreaksDuringCycle } = require('../utils/cycleMode');
 const { PrayerTracking, QuranReading, DhikrTracking, AdhkarTracking, PeriodTracking, Streak, WorshipGoal } = require('../models');
 const { getCurrentDate, getDaysBetweenDates, formatDate } = require('../utils/dateUtils');
 const { computeMetric } = require('./worshipMetrics');
@@ -219,8 +220,7 @@ async function upsertStreak(userId, streakType, currentStreak, lastActivityDate)
 async function updatePrayerStreak(userId) {
   const user = await require('../models').User.findById(userId);
   const isFemaleMaintain =
-    user && user.settings && user.settings.female_settings &&
-    user.settings.female_settings.maintain_streaks_during_period === true;
+    keepStreaksDuringCycle(user);
 
   const streak = await calculateStreak(
     userId,
@@ -240,8 +240,7 @@ async function updatePrayerStreak(userId) {
 async function updateQuranStreak(userId) {
   const user = await require('../models').User.findById(userId);
   const isFemaleMaintain =
-    user && user.settings && user.settings.female_settings &&
-    user.settings.female_settings.maintain_streaks_during_period === true;
+    keepStreaksDuringCycle(user);
 
   const streak = await calculateStreak(
     userId,
@@ -261,8 +260,7 @@ async function updateQuranStreak(userId) {
 async function updateDhikrStreak(userId) {
   const user = await require('../models').User.findById(userId);
   const isFemaleMaintain =
-    user && user.settings && user.settings.female_settings &&
-    user.settings.female_settings.maintain_streaks_during_period === true;
+    keepStreaksDuringCycle(user);
 
   const streak = await calculateStreak(
     userId,
@@ -282,8 +280,7 @@ async function updateDhikrStreak(userId) {
 async function updateMorningAdhkarStreak(userId) {
   const user = await require('../models').User.findById(userId);
   const isFemaleMaintain =
-    user && user.settings && user.settings.female_settings &&
-    user.settings.female_settings.maintain_streaks_during_period === true;
+    keepStreaksDuringCycle(user);
 
   const streak = await calculateStreak(
     userId,
@@ -303,8 +300,7 @@ async function updateMorningAdhkarStreak(userId) {
 async function updateEveningAdhkarStreak(userId) {
   const user = await require('../models').User.findById(userId);
   const isFemaleMaintain =
-    user && user.settings && user.settings.female_settings &&
-    user.settings.female_settings.maintain_streaks_during_period === true;
+    keepStreaksDuringCycle(user);
 
   const streak = await calculateStreak(
     userId,
@@ -324,8 +320,7 @@ async function updateEveningAdhkarStreak(userId) {
 async function updateCombinedStreak(userId) {
   const user = await require('../models').User.findById(userId);
   const isFemaleMaintain =
-    user && user.settings && user.settings.female_settings &&
-    user.settings.female_settings.maintain_streaks_during_period === true;
+    keepStreaksDuringCycle(user);
 
   const [prayerDates, quranDates, dhikrDates] = await Promise.all([
     getPrayerActivityDates(userId),
@@ -354,8 +349,7 @@ async function updateCombinedStreak(userId) {
 async function updatePersonalGoalsStreak(userId) {
   const user = await require('../models').User.findById(userId);
   const isFemaleMaintain =
-    user && user.settings && user.settings.female_settings &&
-    user.settings.female_settings.maintain_streaks_during_period === true;
+    keepStreaksDuringCycle(user);
 
   const { streak, lastActivityDate } = await calculatePersonalGoalsStreak(userId, isFemaleMaintain);
   return await upsertStreak(userId, 'personal_goals', streak, lastActivityDate);
